@@ -1,0 +1,39 @@
+services:
+  postgres:
+    image: postgres:18-alpine
+    environment:
+      POSTGRES_USER: watermarker
+      POSTGRES_PASSWORD: watermarker
+      POSTGRES_DB: watermarker
+    ports:
+      - '5432:5432'
+    volumes:
+      - postgres_data:/var/lib/postgresql
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U watermarker -d watermarker"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  localstack:
+    image: localstack/localstack-pro:latest
+    ports:
+      - '4566:4566' # gateway — all AWS APIs go through here
+      - '443:443'   # HTTPs gateway
+    environment:
+      - LOCALSTACK_AUTH_TOKEN=${LOCALSTACK_AUTH_TOKEN:?}
+      - DEBUG=${DEBUG:-0}
+      - PERSISTENCE=${PERSISTENCE:-0}
+    volumes:
+      - localstack_data:/var/lib/localstack
+      # runs once the gateway accepts traffic
+      - ./scripts/localstack:/etc/localstack/init/ready.d
+    healthcheck:
+      test: ["CMD-SHELL", "awslocal s3api head-bucket --bucket watermarker && awslocal sqs get-queue-url --queue-name watermarker-jobs"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+volumes:
+  postgres_data:
+  localstack_data:
