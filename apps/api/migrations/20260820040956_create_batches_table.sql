@@ -8,7 +8,7 @@ CREATE TABLE batches(
     CONSTRAINT uq_batches_api_key_id_idempotency_key UNIQUE(api_key_id, idempotency_key)
 );
 
-CREATE INDEX idx_batches_api_key_id_created_at ON batches(api_key_id, created_at DESC);
+CREATE INDEX idx_batches_api_key_id_created_at ON batches(api_key_id, created_at DESC, id DESC);
 
 -- +goose Down
 DROP TABLE batches;
