@@ -14,6 +14,8 @@ import (
 	"github.com/rickyroynardson/watermarker/apps/api/internal/batch"
 	"github.com/rickyroynardson/watermarker/apps/api/internal/database"
 	"github.com/rickyroynardson/watermarker/apps/api/internal/logger"
+	"github.com/rickyroynardson/watermarker/apps/api/internal/storage"
+	"github.com/rickyroynardson/watermarker/apps/api/internal/upload"
 	"github.com/rickyroynardson/watermarker/apps/api/internal/utils"
 	"go.uber.org/zap"
 )
@@ -37,6 +39,11 @@ func main() {
 		logger.Fatal("unable to ping database", zap.Error(err))
 	}
 
+	s3Storage, err := storage.NewS3(context.Background(), os.Getenv("S3_BUCKET"))
+	if err != nil {
+		logger.Fatal("unable to configure S3", zap.Error(err))
+	}
+
 	r := gin.Default()
 
 	validator := utils.NewValidator()
@@ -48,6 +55,9 @@ func main() {
 	batches := r.Group("/batches", auth.RequireAPIKey(dbpool))
 	batches.GET("", batchHandler.ListBatches)
 	batches.POST("", batchHandler.CreateBatch)
+
+	uploadHandler := upload.NewHandler(validator, s3Storage)
+	r.POST("/uploads/presign", auth.RequireAPIKey(dbpool), uploadHandler.Presign)
 
 	r.GET("/ping", func(c *gin.Context) {
 		c.JSON(http.StatusOK, gin.H{
