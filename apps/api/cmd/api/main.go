@@ -14,6 +14,7 @@ import (
 	"github.com/rickyroynardson/watermarker/apps/api/internal/batch"
 	"github.com/rickyroynardson/watermarker/apps/api/internal/database"
 	"github.com/rickyroynardson/watermarker/apps/api/internal/logger"
+	"github.com/rickyroynardson/watermarker/apps/api/internal/utils"
 	"go.uber.org/zap"
 )
 
@@ -38,9 +39,11 @@ func main() {
 
 	r := gin.Default()
 
+	validator := utils.NewValidator()
+
 	batchRepository := batch.NewRepository(dbpool)
 	batchService := batch.NewService(batchRepository)
-	batchHandler := batch.NewHandler(batchService)
+	batchHandler := batch.NewHandler(validator, batchService)
 
 	batches := r.Group("/batches", auth.RequireAPIKey(dbpool))
 	batches.GET("", batchHandler.ListBatches)

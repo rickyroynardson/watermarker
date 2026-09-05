@@ -5,18 +5,21 @@ import (
 	"net/http"
 
 	"github.com/gin-gonic/gin"
+	"github.com/go-playground/validator/v10"
 	"github.com/rickyroynardson/watermarker/apps/api/internal/auth"
 	"github.com/rickyroynardson/watermarker/apps/api/internal/utils"
 	"go.uber.org/zap"
 )
 
 type BatchHandler struct {
-	service *BatchService
+	validator *validator.Validate
+	service   *BatchService
 }
 
-func NewHandler(s *BatchService) *BatchHandler {
+func NewHandler(v *validator.Validate, s *BatchService) *BatchHandler {
 	return &BatchHandler{
-		service: s,
+		validator: v,
+		service:   s,
 	}
 }
 
@@ -47,5 +50,31 @@ func (h *BatchHandler) ListBatches(c *gin.Context) {
 }
 
 func (h *BatchHandler) CreateBatch(c *gin.Context) {
-	c.JSON(http.StatusCreated, gin.H{"message": "batch created"})
+	var req CreateBatchRequest
+
+	if err := c.ShouldBindJSON(&req); err != nil {
+		zap.L().Debug("create batch: bad json", zap.Error(err))
+		utils.RespondError(c, http.StatusBadRequest, utils.CodeInvalidRequest, "invalid request")
+		return
+	}
+
+	req.IdempotencyKey = c.GetHeader("Idempotency-Key")
+
+	if err := h.validator.Struct(&req); err != nil {
+		zap.L().Debug("create batch: invalid request", zap.Error(err))
+		utils.RespondError(c, http.StatusBadRequest, utils.CodeInvalidRequest, utils.ValidationMessage(err))
+		return
+	}
+
+	res, err := h.service.CreateBatch(c.Request.Context(), auth.APIKeyID(c), req)
+	switch {
+	case errors.Is(err, ErrIdempotencyConflict):
+		utils.RespondError(c, http.StatusConflict, CodeIdempotencyConflict, "idempotency key was already used with a different request")
+	case err != nil:
+		zap.L().Error("create batch", zap.Error(err))
+		utils.RespondError(c, http.StatusInternalServerError, utils.CodeInternal, "something went wrong")
+	default:
+		utils.RespondSuccess(c, http.StatusCreated, res)
+	}
+
 }
