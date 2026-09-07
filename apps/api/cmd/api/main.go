@@ -8,15 +8,11 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/gin-gonic/gin"
 	"github.com/joho/godotenv"
-	"github.com/rickyroynardson/watermarker/apps/api/internal/auth"
-	"github.com/rickyroynardson/watermarker/apps/api/internal/batch"
 	"github.com/rickyroynardson/watermarker/apps/api/internal/database"
+	"github.com/rickyroynardson/watermarker/apps/api/internal/httpapi"
 	"github.com/rickyroynardson/watermarker/apps/api/internal/logger"
 	"github.com/rickyroynardson/watermarker/apps/api/internal/storage"
-	"github.com/rickyroynardson/watermarker/apps/api/internal/upload"
-	"github.com/rickyroynardson/watermarker/apps/api/internal/utils"
 	"go.uber.org/zap"
 )
 
@@ -44,30 +40,9 @@ func main() {
 		logger.Fatal("unable to configure S3", zap.Error(err))
 	}
 
-	r := gin.Default()
-
-	validator := utils.NewValidator()
-
-	batchRepository := batch.NewRepository(dbpool)
-	batchService := batch.NewService(batchRepository)
-	batchHandler := batch.NewHandler(validator, batchService)
-
-	batches := r.Group("/batches", auth.RequireAPIKey(dbpool))
-	batches.GET("", batchHandler.ListBatches)
-	batches.POST("", batchHandler.CreateBatch)
-
-	uploadHandler := upload.NewHandler(validator, s3Storage)
-	r.POST("/uploads/presign", auth.RequireAPIKey(dbpool), uploadHandler.Presign)
-
-	r.GET("/ping", func(c *gin.Context) {
-		c.JSON(http.StatusOK, gin.H{
-			"message": "pong",
-		})
-	})
-
 	srv := &http.Server{
 		Addr:    ":8080",
-		Handler: r.Handler(),
+		Handler: httpapi.NewRouter(dbpool, s3Storage),
 	}
 
 	go func() {

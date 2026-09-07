@@ -3,14 +3,20 @@ package storage
 import (
 	"context"
 	"errors"
+	"net/url"
 	"time"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/config"
 	"github.com/aws/aws-sdk-go-v2/service/s3"
+	"github.com/aws/aws-sdk-go-v2/service/s3/types"
+	"github.com/aws/smithy-go"
 )
 
+var ErrNotFound = errors.New("object not found")
+
 type S3 struct {
+	client    *s3.Client
 	presigner *s3.PresignClient
 	bucket    string
 }
@@ -33,7 +39,7 @@ func NewS3(ctx context.Context, bucket string) (*S3, error) {
 	client := s3.NewFromConfig(cfg, func(o *s3.Options) {
 		o.UsePathStyle = true
 	})
-	return &S3{presigner: s3.NewPresignClient(client), bucket: bucket}, nil
+	return &S3{client: client, presigner: s3.NewPresignClient(client), bucket: bucket}, nil
 }
 
 func (s *S3) PresignUpload(ctx context.Context, key, contentType string) (S3Upload, error) {
@@ -54,4 +60,56 @@ func (s *S3) PresignUpload(ctx context.Context, key, contentType string) (S3Uplo
 	}
 	post.Values["Content-Type"] = contentType
 	return S3Upload{Key: key, URL: post.URL, Fields: post.Values, ExpiresIn: expiresIn}, nil
+}
+
+// Promote copies src to dst only if dst does not exist, so the first successful copy wins.
+func (s *S3) Promote(ctx context.Context, src, dst string) error {
+	_, err := s.client.CopyObject(ctx, &s3.CopyObjectInput{
+		Bucket:      aws.String(s.bucket),
+		CopySource:  aws.String(url.PathEscape(s.bucket + "/" + src)),
+		Key:         aws.String(dst),
+		IfNoneMatch: aws.String("*"),
+	})
+	var apiErr smithy.APIError
+	if errors.As(err, &apiErr) && apiErr.ErrorCode() == "PreconditionFailed" {
+		return nil // Another request already promoted this upload.
+	}
+	if isNotFound(err) {
+		// A concurrent request may have already deleted the staging object.
+		_, err = s.client.HeadObject(ctx, &s3.HeadObjectInput{
+			Bucket: aws.String(s.bucket),
+			Key:    aws.String(dst),
+		})
+		if isNotFound(err) {
+			return ErrNotFound
+		}
+	}
+	return err
+}
+
+func (s *S3) Delete(ctx context.Context, key string) error {
+	_, err := s.client.DeleteObject(ctx, &s3.DeleteObjectInput{
+		Bucket: aws.String(s.bucket),
+		Key:    aws.String(key),
+	})
+	return err
+}
+
+func isNotFound(err error) bool {
+	if err == nil {
+		return false
+	}
+	var notFound *types.NotFound
+	var noSuchKey *types.NoSuchKey
+	if errors.As(err, &notFound) || errors.As(err, &noSuchKey) {
+		return true
+	}
+	var apiErr smithy.APIError
+	if errors.As(err, &apiErr) {
+		switch apiErr.ErrorCode() {
+		case "NotFound", "NoSuchKey":
+			return true
+		}
+	}
+	return false
 }

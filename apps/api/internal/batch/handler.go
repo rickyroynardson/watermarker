@@ -70,6 +70,10 @@ func (h *BatchHandler) CreateBatch(c *gin.Context) {
 	switch {
 	case errors.Is(err, ErrIdempotencyConflict):
 		utils.RespondError(c, http.StatusConflict, CodeIdempotencyConflict, "idempotency key was already used with a different request")
+	case errors.Is(err, ErrInvalidUploadKey):
+		utils.RespondError(c, http.StatusBadRequest, utils.CodeInvalidRequest, "watermark_key and source_keys must be uploads issued to this API key")
+	case errors.Is(err, ErrUploadNotFound):
+		utils.RespondError(c, http.StatusBadRequest, CodeUploadNotFound, "one or more uploads were not found")
 	case err != nil:
 		zap.L().Error("create batch", zap.Error(err))
 		utils.RespondError(c, http.StatusInternalServerError, utils.CodeInternal, "something went wrong")
