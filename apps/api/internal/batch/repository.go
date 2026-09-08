@@ -106,6 +106,19 @@ func (r *BatchRepository) CreateBatch(ctx context.Context, b Batch) (Batch, erro
 		return Batch{}, err
 	}
 
+	// The job intent commits atomically with the batch and its images.
+	_, err = tx.Exec(ctx, `
+		INSERT INTO outbox_messages (image_id, payload)
+		SELECT id, jsonb_build_object(
+			'version', 1, 'job_type', 'composite', 'batch_id', batch_id,
+			'image_id', id, 'source_key', source_key, 'watermark_key', $2::text
+		)
+		FROM images WHERE batch_id = $1;
+	`, b.ID, b.WatermarkKey)
+	if err != nil {
+		return Batch{}, err
+	}
+
 	if err := tx.Commit(ctx); err != nil {
 		return Batch{}, err
 	}

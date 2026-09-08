@@ -1,7 +1,7 @@
 # API
 
 Run from `apps/api` with `go run ./cmd/api`. The API loads `.env` from its
-working directory; add the storage settings from the root `.env.example` to
+working directory; add the AWS settings from the root `.env.example` to
 `apps/api/.env` alongside `DATABASE_URL`. Start infrastructure with `make up`
 and apply migrations with `make migrate-up` from the repository root.
 
@@ -12,6 +12,24 @@ principal needs `s3:GetObject` and `s3:PutObject` on `uploads/*` and `sources/*`
 prefix, then deletes the originals). Also grant `s3:ListBucket` on the bucket so
 missing objects produce a 404 rather than an ambiguous 403 during
 [HEAD checks](https://docs.aws.amazon.com/AmazonS3/latest/API/API_HeadObject.html).
+The API needs no SQS permissions. Run `go run ./cmd/consumer` from `apps/api`
+in a second terminal for outbox delivery and result consumption. It loads the same
+`.env` and needs `DATABASE_URL`, AWS credentials/region, `SQS_JOBS_QUEUE_URL`, and
+`SQS_RESULTS_QUEUE_URL`. Grant it `sqs:SendMessage` on jobs and `sqs:ReceiveMessage`
+and `sqs:DeleteMessage` on results. Both clients honor `AWS_ENDPOINT_URL`.
+
+Get the LocalStack queue URLs with:
+
+```sh
+docker compose exec localstack awslocal sqs get-queue-url --queue-name watermarker-jobs --query QueueUrl --output text
+docker compose exec localstack awslocal sqs get-queue-url --queue-name watermarker-results --query QueueUrl --output text
+```
+
+The initialization script configures a separate DLQ for each queue after three
+failed deliveries. Existing results queues need their redrive policy updated too;
+use the same policy in AWS. The consumer retains invalid messages and failed
+handler attempts for retry,
+so monitor and redrive the results DLQ after fixing the cause.
 
 ## Presign uploads
 
@@ -56,10 +74,72 @@ Send an `Idempotency-Key` header to safely retry batch creation. Matching retrie
 return the existing batch without contacting S3; changed requests return 409.
 Source order is ignored. Staging objects are deleted only after a successful
 database commit; cleanup failures are logged without failing an accepted batch.
+Batch creation writes one `outbox_messages` row per image in the same transaction as
+its batch and image rows. It returns 201 after commit without contacting SQS.
+The background dispatcher sends each stored JSON message to the jobs queue:
+
+```json
+{
+  "version": 1,
+  "job_type": "composite",
+  "batch_id": "<batch-uuid>",
+  "image_id": "<image-uuid>",
+  "source_key": "sources/<api-key-id>/<upload-uuid>",
+  "watermark_key": "sources/<api-key-id>/<watermark-uuid>"
+}
+```
+
+Apply all migrations before starting either binary. The outbox migration creates
+the table and its index; new batch creation populates it.
+
+The dispatcher claims one due row with `FOR UPDATE SKIP LOCKED`, sends it with a
+10-second timeout, and deletes it only after SQS accepts it. Failed sends remain
+in Postgres and become eligible again after five seconds. Idle dispatchers poll
+once per second. Multiple consumer processes can dispatch different rows safely;
+a restart resumes from the persisted outbox without a client retry.
+
+A crash after SQS accepts a message but before the outbox deletion commits can
+still resend that message. This is an at-least-once
+[transactional outbox](https://docs.aws.amazon.com/prescriptive-guidance/latest/cloud-design-patterns/transactional-outbox.html),
+so processing must tolerate repeated image IDs.
+
 Partial promotions survive failures so a retry can reuse them. Expiration of
 unused staging uploads and cleanup of unreferenced persistent objects remain
 unimplemented. Presigning creates no database rows. File-byte validation is
 planned for the worker, which is currently a placeholder.
+
+## Result messages
+
+The Go consumer long-polls the results queue and accepts version 1 `composite`
+messages. A successful result is:
+
+```json
+{
+  "version": 1,
+  "job_type": "composite",
+  "batch_id": "<batch-uuid>",
+  "image_id": "<image-uuid>",
+  "status": "done",
+  "output_key": "processed/<batch-uuid>/<image-uuid>.png"
+}
+```
+
+For failures, use `"status": "failed"` and `"error": "reason"`, omitting
+`output_key`. Errors must be nonblank and at most 4096 bytes. Successful keys must
+match the batch/image IDs and end in `.png`, `.jpg`, `.jpeg`, or `.webp`.
+
+Results update only images with `status = 'pending'`; the first terminal result
+wins. Duplicate or later conflicting terminal results leave status, output, and
+`updated_at` unchanged. Messages are deleted from SQS only after the database
+update succeeds (or an existing terminal image is verified). Failed updates,
+unknown IDs, and malformed messages are left for retry/DLQ. Result handling has a
+10-second timeout within a 60-second message visibility timeout. Shutdown cancels
+polling and dispatch before closing the database pool.
+
+The Python image worker remains a placeholder. When implemented, it must write to
+the deterministic output key above, publish its result before acknowledging the
+job, and tolerate repeated jobs. The Go consumer's idempotency protects database
+state; it does not prevent repeated image computation or S3 writes.
 
 ## Tests
 
@@ -80,9 +160,10 @@ active Docker CLI context, including OrbStack and other non-default sockets.
 `TestBatchAPIIntegration` in `internal/httpapi/batch_integration_test.go` sends
 HTTP requests through the same router used by production: authentication, handlers,
 services, repositories, and storage all run together. It applies the real migrations,
-uploads files to LocalStack, then verifies HTTP responses, PostgreSQL rows, and S3
-contents. Scenarios cover creation, retries, conflicts, ownership, invalid input,
-concurrent requests, and rollback after a database constraint failure.
+uploads files to LocalStack, then verifies HTTP responses, PostgreSQL rows, S3
+contents, and SQS job payloads. Pipeline scenarios cover atomic outbox writes,
+failed sends, restart recovery, concurrent dispatch, crashes after send, and
+idempotent results. Unit checks verify result validation and acknowledgement order.
 
 Focused unit tests cover validation and failures that are difficult to trigger
 reliably through containers, such as S3 outages and failed cleanup. Separate

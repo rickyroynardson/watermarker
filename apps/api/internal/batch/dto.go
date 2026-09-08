@@ -40,6 +40,15 @@ type Batch struct {
 	Images         []Image   `json:"images"`
 }
 
+type Job struct {
+	Version      int       `json:"version"`
+	JobType      string    `json:"job_type"`
+	BatchID      uuid.UUID `json:"batch_id"`
+	ImageID      uuid.UUID `json:"image_id"`
+	SourceKey    string    `json:"source_key"`
+	WatermarkKey string    `json:"watermark_key"`
+}
+
 type Image struct {
 	ID        uuid.UUID `json:"id"`
 	SourceKey string    `json:"source_key"`

@@ -23,11 +23,14 @@ import (
 	"github.com/aws/aws-sdk-go-v2/credentials"
 	"github.com/aws/aws-sdk-go-v2/service/s3"
 	"github.com/aws/aws-sdk-go-v2/service/s3/types"
+	"github.com/aws/aws-sdk-go-v2/service/sqs"
 	"github.com/gin-gonic/gin"
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/rickyroynardson/watermarker/apps/api/internal/batch"
 	"github.com/rickyroynardson/watermarker/apps/api/internal/httpapi"
+	"github.com/rickyroynardson/watermarker/apps/api/internal/outbox"
+	"github.com/rickyroynardson/watermarker/apps/api/internal/queue"
 	"github.com/rickyroynardson/watermarker/apps/api/internal/storage"
 	"github.com/rickyroynardson/watermarker/apps/api/internal/utils"
 	"github.com/stretchr/testify/require"
@@ -101,7 +104,7 @@ func TestBatchAPIIntegration(t *testing.T) {
 	}
 
 	awsContainer, err := localstack.Run(ctx, "localstack/localstack:4.14.0",
-		testcontainers.WithEnv(map[string]string{"SERVICES": "s3"}))
+		testcontainers.WithEnv(map[string]string{"SERVICES": "s3,sqs"}))
 	testcontainers.CleanupContainer(t, awsContainer)
 	require.NoError(t, err)
 	endpoint, err := awsContainer.PortEndpoint(ctx, "4566/tcp", "http")
@@ -124,12 +127,19 @@ func TestBatchAPIIntegration(t *testing.T) {
 	for key, value := range map[string]string{
 		"AWS_REGION": "us-east-1", "AWS_ACCESS_KEY_ID": "test", "AWS_SECRET_ACCESS_KEY": "test",
 		"AWS_SESSION_TOKEN": "", "AWS_PROFILE": "", "AWS_EC2_METADATA_DISABLED": "true",
-		"AWS_ENDPOINT_URL": endpoint, "AWS_ENDPOINT_URL_S3": endpoint,
+		"AWS_ENDPOINT_URL": endpoint, "AWS_ENDPOINT_URL_S3": endpoint, "AWS_ENDPOINT_URL_SQS": endpoint,
 		"AWS_CONFIG_FILE": t.TempDir() + "/config", "AWS_SHARED_CREDENTIALS_FILE": t.TempDir() + "/credentials",
 	} {
 		t.Setenv(key, value)
 	}
 	objects, err := storage.NewS3(ctx, bucket)
+	require.NoError(t, err)
+	sqsClient := sqs.NewFromConfig(aws.Config{
+		Region: "us-east-1", Credentials: credentials.NewStaticCredentialsProvider("test", "test", ""),
+	}, func(o *sqs.Options) { o.BaseEndpoint = aws.String(endpoint) })
+	createdQueue, err := sqsClient.CreateQueue(ctx, &sqs.CreateQueueInput{QueueName: aws.String("watermarker-jobs")})
+	require.NoError(t, err)
+	jobs, err := queue.NewSQS(ctx, aws.ToString(createdQueue.QueueUrl))
 	require.NoError(t, err)
 	gin.SetMode(gin.TestMode)
 	router := httpapi.NewRouter(db, objects)
@@ -194,11 +204,13 @@ func TestBatchAPIIntegration(t *testing.T) {
 	}
 	counts := func(t *testing.T, idem string, batches, images int) {
 		t.Helper()
-		var gotBatches, gotImages int
+		var gotBatches, gotImages, gotJobs int
 		require.NoError(t, db.QueryRow(ctx, "SELECT count(*) FROM batches WHERE api_key_id = $1 AND idempotency_key = $2", owner, idem).Scan(&gotBatches))
 		require.NoError(t, db.QueryRow(ctx, "SELECT count(*) FROM images JOIN batches ON batches.id = images.batch_id WHERE api_key_id = $1 AND idempotency_key = $2", owner, idem).Scan(&gotImages))
 		require.Equal(t, batches, gotBatches)
 		require.Equal(t, images, gotImages)
+		require.NoError(t, db.QueryRow(ctx, "SELECT count(*) FROM outbox_messages o JOIN images i ON i.id = o.image_id JOIN batches b ON b.id = i.batch_id WHERE b.api_key_id = $1 AND b.idempotency_key = $2", owner, idem).Scan(&gotJobs))
+		require.Equal(t, images, gotJobs)
 	}
 
 	t.Run("authentication", func(t *testing.T) {
@@ -259,6 +271,45 @@ func TestBatchAPIIntegration(t *testing.T) {
 		require.NoError(t, json.Unmarshal(w.Body.Bytes(), &list))
 		require.Empty(t, list.Data.Batches)
 
+		beforeDispatch, err := sqsClient.ReceiveMessage(ctx, &sqs.ReceiveMessageInput{QueueUrl: createdQueue.QueueUrl, WaitTimeSeconds: 1})
+		require.NoError(t, err)
+		require.Empty(t, beforeDispatch.Messages, "batch creation must only write the outbox")
+		for range 2 {
+			sent, err := outbox.DispatchOne(ctx, db, jobs.Send)
+			require.NoError(t, err)
+			require.True(t, sent)
+		}
+		require.Equal(t, id, batchID(t, request(http.MethodPost, "/batches", token, "create", jsonBody(t, req))))
+		sent, err := outbox.DispatchOne(ctx, db, jobs.Send)
+		require.NoError(t, err)
+		require.False(t, sent, "replaying an already dispatched batch must not recreate jobs")
+
+		var received []batch.Job
+		for len(received) < 2 {
+			messages, err := sqsClient.ReceiveMessage(ctx, &sqs.ReceiveMessageInput{
+				QueueUrl: createdQueue.QueueUrl, MaxNumberOfMessages: 10, WaitTimeSeconds: 1,
+			})
+			require.NoError(t, err)
+			require.NotEmpty(t, messages.Messages)
+			for _, message := range messages.Messages {
+				var job batch.Job
+				require.NoError(t, json.Unmarshal([]byte(aws.ToString(message.Body)), &job))
+				require.Equal(t, 1, job.Version)
+				require.Equal(t, "composite", job.JobType)
+				require.Equal(t, id, job.BatchID)
+				require.Equal(t, storedWatermark, job.WatermarkKey)
+				var sourceKey string
+				require.NoError(t, db.QueryRow(ctx, "SELECT source_key FROM images WHERE id = $1 AND batch_id = $2", job.ImageID, id).Scan(&sourceKey))
+				require.Equal(t, sourceKey, job.SourceKey)
+				received = append(received, job)
+			}
+		}
+		require.Len(t, received, 2)
+		require.NotEqual(t, received[0].ImageID, received[1].ImageID)
+		remaining, err := sqsClient.ReceiveMessage(ctx, &sqs.ReceiveMessageInput{QueueUrl: createdQueue.QueueUrl, WaitTimeSeconds: 1})
+		require.NoError(t, err)
+		require.Empty(t, remaining.Messages, "matching retries and rejected requests must not enqueue")
+
 		// Replaying an upload URL cannot change the inputs of another accepted batch.
 		postUpload(t, ctx, first, "replacement image")
 		batchID(t, request(http.MethodPost, "/batches", token, "reuse", jsonBody(t, req)))
@@ -312,4 +363,8 @@ func TestBatchAPIIntegration(t *testing.T) {
 			require.NoError(t, err)
 		}
 	})
+	t.Run("pipeline", func(t *testing.T) {
+		testPipeline(t, ctx, db, sqsClient, owner)
+	})
+
 }
