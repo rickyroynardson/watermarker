@@ -105,8 +105,8 @@ so processing must tolerate repeated image IDs.
 
 Partial promotions survive failures so a retry can reuse them. Expiration of
 unused staging uploads and cleanup of unreferenced persistent objects remain
-unimplemented. Presigning creates no database rows. File-byte validation is
-planned for the worker, which is currently a placeholder.
+unimplemented. Presigning creates no database rows. The Python worker validates
+image bytes before processing them.
 
 ## Result messages
 
@@ -136,10 +136,16 @@ unknown IDs, and malformed messages are left for retry/DLQ. Result handling has 
 10-second timeout within a 60-second message visibility timeout. Shutdown cancels
 polling and dispatch before closing the database pool.
 
-The Python image worker remains a placeholder. When implemented, it must write to
-the deterministic output key above, publish its result before acknowledging the
-job, and tolerate repeated jobs. The Go consumer's idempotency protects database
-state; it does not prevent repeated image computation or S3 writes.
+The [Python worker](../worker/README.md) writes to the deterministic output key
+above, publishes its result before acknowledging the job, and reuses existing
+output on redelivery. Conditional S3 writes prevent duplicate output overwrites;
+the Go consumer's conditional updates protect database state. Concurrent deliveries
+can still repeat image computation.
+
+After `uv sync --locked` in `apps/worker`, run it with
+`uv run --env-file ../api/.env main.py` from that directory alongside the Go API
+and consumer. Set `WATERMARKER_WORKER_TEST=1` when running the integration suite
+to include real Python processing against the disposable test services.
 
 ## Tests
 

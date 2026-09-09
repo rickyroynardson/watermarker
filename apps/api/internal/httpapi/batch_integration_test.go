@@ -366,5 +366,11 @@ func TestBatchAPIIntegration(t *testing.T) {
 	t.Run("pipeline", func(t *testing.T) {
 		testPipeline(t, ctx, db, sqsClient, owner)
 	})
+	t.Run("python worker", func(t *testing.T) {
+		if os.Getenv("WATERMARKER_WORKER_TEST") != "1" {
+			t.Skip("set WATERMARKER_WORKER_TEST=1 after uv sync in apps/worker")
+		}
+		testPythonWorker(t, db, s3Client, sqsClient, objects, owner)
+	})
 
 }

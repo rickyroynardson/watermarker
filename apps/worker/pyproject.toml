@@ -1,7 +1,10 @@
 [project]
 name = "worker"
 version = "0.1.0"
-description = "Add your description here"
+description = "SQS image watermark worker using Pillow"
 readme = "README.md"
 requires-python = ">=3.14"
-dependencies = []
+dependencies = [
+    "boto3>=1.43.89",
+    "pillow>=12.3.0",
+]
