@@ -14,6 +14,8 @@ VISIBILITY_TIMEOUT=120
 MAX_RECEIVES=3
 
 awslocal s3api create-bucket --bucket "$BUCKET" >/dev/null
+awslocal s3api put-bucket-cors --bucket "$BUCKET" \
+  --cors-configuration file:///etc/localstack/init/ready.d/cors.json
 
 # Both job and result failures need somewhere to land after repeated retries.
 for queue in "$JOBS" "$RESULTS"; do
