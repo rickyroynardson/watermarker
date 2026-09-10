@@ -28,10 +28,10 @@ migrate-create:
 	$(GOOSE) create $(name) sql
 
 observability-up:
-	docker compose -p watermarker-observability -f observability/compose.yml up -d
+	docker compose -p watermarker-observability -f observability/docker-compose.yml up -d
 
 observability-down:
-	docker compose -p watermarker-observability -f observability/compose.yml down
+	docker compose -p watermarker-observability -f observability/docker-compose.yml down
 
 observability-nuke:
-	docker compose -p watermarker-observability -f observability/compose.yml down -v
+	docker compose -p watermarker-observability -f observability/docker-compose.yml down -v
