@@ -16,11 +16,13 @@ import (
 )
 
 func main() {
-	log := logger.New()
-	defer log.Sync()
+	envErr := godotenv.Load()
+
+	log, shutdownLogs := logger.New("watermarker-consumer")
+	defer shutdownLogs()
 	zap.ReplaceGlobals(log)
-	if err := godotenv.Load(); err != nil {
-		log.Warn("no .env file loaded", zap.Error(err))
+	if envErr != nil {
+		log.Warn("no .env file loaded", zap.Error(envErr))
 	}
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
@@ -40,6 +42,7 @@ func main() {
 	if err != nil {
 		log.Fatal("configure SQS_RESULTS_QUEUE_URL", zap.Error(err))
 	}
+	log.Info("consumer started")
 	dispatcherDone := make(chan struct{})
 	go func() {
 		defer close(dispatcherDone)

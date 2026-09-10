@@ -186,3 +186,8 @@ For a fast run without Docker:
 ```sh
 go test -short ./...
 ```
+
+## Observability
+
+See [the logging setup](../../observability/README.md) for OpenTelemetry export,
+local Grafana/Loki, queries, and the pipeline smoke check.

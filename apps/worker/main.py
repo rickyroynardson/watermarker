@@ -7,6 +7,7 @@ from threading import Event
 import boto3
 from botocore.config import Config
 from worker.consumer import Worker
+from worker.telemetry import configure_logging
 
 log = logging.getLogger(__name__)
 
@@ -21,9 +22,6 @@ def main():
         help="poll once, then exit (failures exit nonzero)",
     )
     args = parser.parse_args()
-    logging.basicConfig(
-        level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s"
-    )
     required = ("S3_BUCKET", "SQS_JOBS_QUEUE_URL", "SQS_RESULTS_QUEUE_URL")
     for name in required:
         if not os.environ.get(name):
@@ -54,4 +52,5 @@ def main():
 
 
 if __name__ == "__main__":
-    main()
+    with configure_logging():
+        main()

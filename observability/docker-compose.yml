@@ -1,0 +1,38 @@
+services:
+  loki:
+    image: grafana/loki:3.7.7
+    ports:
+      - 3100:3100
+    volumes:
+      - ./loki-config.yaml:/etc/loki/local-config.yaml:ro
+      - loki_data:/loki
+
+  otel-collector:
+    image: otel/opentelemetry-collector:0.160.0
+    ports:
+      - 1888:1888
+      - 8888:8888
+      - 8889:8889
+      - 13133:13133
+      - 4317:4317
+      - 4318:4318
+      - 55679:55679
+    volumes:
+      - ./otel-collector-config.yaml:/etc/otelcol/config.yaml:ro
+    depends_on:
+      - loki
+    
+  grafana:
+    image: grafana/grafana:latest
+    ports:
+      - 3000:3000
+    environment:
+      - GF_USERS_ALLOW_SIGN_UP=false
+    volumes:
+      - grafana_data:/var/lib/grafana
+    depends_on:
+      - loki
+
+volumes:
+  loki_data:
+  grafana_data:

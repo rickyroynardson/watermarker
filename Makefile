@@ -3,7 +3,7 @@ export GOOSE_DRIVER = postgres
 export GOOSE_MIGRATION_DIR = apps/api/migrations
 export GOOSE_DBSTRING ?= postgres://watermarker:watermarker@localhost:5432/watermarker?sslmode=disable
 
-.PHONY: up down nuke migrate-up migrate-down migrate-status migrate-create
+.PHONY: up down nuke migrate-up migrate-down migrate-status migrate-create observability-up observability-down observability-nuke
 
 up:
 	docker compose up -d
@@ -26,3 +26,12 @@ migrate-status:
 migrate-create:
 	@test -n "$(name)" || (echo "usage: make migrate-create name=..." && exit 1)
 	$(GOOSE) create $(name) sql
+
+observability-up:
+	docker compose -p watermarker-observability -f observability/compose.yml up -d
+
+observability-down:
+	docker compose -p watermarker-observability -f observability/compose.yml down
+
+observability-nuke:
+	docker compose -p watermarker-observability -f observability/compose.yml down -v

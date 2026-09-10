@@ -17,12 +17,14 @@ import (
 )
 
 func main() {
-	logger := logger.New()
-	defer logger.Sync()
+	envErr := godotenv.Load()
+
+	logger, shutdownLogs := logger.New("watermarker-api")
+	defer shutdownLogs()
 	zap.ReplaceGlobals(logger)
 
-	if err := godotenv.Load(); err != nil {
-		logger.Warn("no .env file loaded", zap.Error(err))
+	if envErr != nil {
+		logger.Warn("no .env file loaded", zap.Error(envErr))
 	}
 
 	dbpool, err := database.ConnectPgx(context.Background(), os.Getenv("DATABASE_URL"))
@@ -45,6 +47,7 @@ func main() {
 		Handler: httpapi.NewRouter(dbpool, s3Storage),
 	}
 
+	logger.Info("API started", zap.String("address", srv.Addr))
 	go func() {
 		if err := srv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
 			logger.Fatal("listen", zap.Error(err))

@@ -2,7 +2,7 @@
 
 Consumes one image job at a time from SQS, downloads the source and watermark,
 composites them with Pillow, writes a PNG to S3, and publishes the result for the
-Go consumer. Uses Python 3.14 and two dependencies: `boto3` and `Pillow`.
+Go consumer. Uses Python 3.14, `boto3`, `Pillow`, and OpenTelemetry logging.
 
 ## Run
 
@@ -93,3 +93,8 @@ It uploads actual PNGs, creates a batch, dispatches the outbox, runs Python thro
 also checks duplicate delivery preserves the S3 object version and database
 timestamp, and corrupt image bytes produce a failed result. Without the environment
 flag, Go tests do not require Python or `uv`.
+
+## Observability
+
+See [the logging setup](../../observability/README.md) for OpenTelemetry export,
+local Grafana/Loki, queries, and the pipeline smoke check.

@@ -67,7 +67,9 @@ class Worker:
                         raise
         self.sqs.send_message(QueueUrl=self.results_url, MessageBody=json.dumps(result))
         self.sqs.delete_message(QueueUrl=self.jobs_url, ReceiptHandle=message["ReceiptHandle"])
-        log.info("image %s: %s", job.image_id, result["status"])
+        log.info("image processed", extra={
+            "image_id": job.image_id, "batch_id": job.batch_id, "status": result["status"],
+        })
 
     @contextmanager
     def visibility_heartbeat(self, receipt: str):
