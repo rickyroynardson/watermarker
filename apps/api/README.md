@@ -7,7 +7,8 @@ and apply migrations with `make migrate-up` from the repository root.
 
 For AWS, set `S3_BUCKET` and `AWS_REGION`, remove the LocalStack endpoint and
 test credentials, and use the SDK's standard credential chain. The signing
-principal needs `s3:GetObject` and `s3:PutObject` on `uploads/*` and `sources/*`, and
+principal needs `s3:GetObject` on `processed/*` for previews/downloads,
+`s3:GetObject` and `s3:PutObject` on `uploads/*` and `sources/*`, and
 `s3:DeleteObject` on `uploads/*` (batch creation copies staging objects to a persistent
 prefix, then deletes the originals). Also grant `s3:ListBucket` on the bucket so
 missing objects produce a 404 rather than an ambiguous 403 during
@@ -107,6 +108,29 @@ Partial promotions survive failures so a retry can reuse them. Expiration of
 unused staging uploads and cleanup of unreferenced persistent objects remain
 unimplemented. Presigning creates no database rows. The Python worker validates
 image bytes before processing them.
+
+## Batch status and output links
+
+`GET /batches/:id` requires `Authorization: Bearer <api-key>` and returns
+`{ "data": <batch> }` with `id`, `watermark_key`, `created_at`, `status`, and `images`.
+Each image contains `id`, `source_key`, `status`, and `updated_at`; failed images
+include `error`, while done images include `preview_url` and `download_url`.
+
+Batch status is `pending` while any image remains pending, then `failed` if any
+image failed, otherwise `done`. Pending covers both queued and active processing;
+there is no percentage for an individual image. Completed images are available
+even if another image is still pending or failed.
+
+Unknown batches and batches owned by another API key both return 404; invalid
+IDs return 400. Responses use `Cache-Control: no-store`. Output links are signed
+S3 GET URLs valid for up to 15 minutes (less if signing credentials expire).
+The preview uses inline content disposition, and the download uses attachment
+with the image ID and output extension as the filename. Fetch details again for
+fresh links. Treat these URLs as bearer credentials; the bucket stays private.
+
+The signing principal needs `s3:GetObject` on `processed/*`. The signed endpoint
+must be reachable from the browser. Native image previews and download links do
+not need fetch/CORS access; the existing POST CORS policy still covers uploads.
 
 ## Result messages
 

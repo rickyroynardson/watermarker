@@ -12,6 +12,8 @@ import (
 
 // these stubs exercise failures that the HTTP integration suite cannot reliably induce.
 type failingRepo struct {
+	details              BatchDetails
+	detailsErr           error
 	stored               Batch
 	lookupErr, createErr error
 }
@@ -33,6 +35,8 @@ func (r *failingRepo) CreateBatch(_ context.Context, b Batch) (Batch, error) {
 }
 
 type failingStore struct {
+	signErr               error
+	signed                []string
 	promoteErr, deleteErr error
 	promotions, deletions int
 }
@@ -101,4 +105,53 @@ func TestPersistentKeyRequiresIssuedFormat(t *testing.T) {
 		_, err := persistentKey(owner, "uploads/"+owner.String()+"/"+id)
 		require.ErrorIs(t, err, ErrInvalidUploadKey)
 	}
+}
+
+func (r *failingRepo) GetBatch(context.Context, uuid.UUID, uuid.UUID) (BatchDetails, error) {
+	return r.details, r.detailsErr
+}
+func (s *failingStore) PresignOutput(_ context.Context, key string, download bool) (string, error) {
+	s.signed = append(s.signed, key)
+	return "https://storage.example/output", s.signErr
+}
+
+func TestGetBatch(t *testing.T) {
+	for _, tt := range []struct {
+		statuses []string
+		want     string
+	}{
+		{[]string{"pending", "done", "failed"}, "pending"},
+		{[]string{"failed", "pending"}, "pending"},
+		{[]string{"done", "failed"}, "failed"},
+		{[]string{"done", "done"}, "done"},
+	} {
+		repo, store := &failingRepo{}, &failingStore{}
+		for _, status := range tt.statuses {
+			repo.details.Images = append(repo.details.Images, ImageDetails{Status: status, OutputKey: "output"})
+		}
+		result, err := NewService(repo, store).GetBatch(t.Context(), uuid.New(), uuid.New())
+		require.NoError(t, err)
+		require.Equal(t, tt.want, result.Status)
+		done := 0
+		for _, image := range result.Images {
+			if image.Status == "done" {
+				done++
+				require.NotEmpty(t, image.PreviewURL)
+				require.NotEmpty(t, image.DownloadURL)
+			} else {
+				require.Empty(t, image.PreviewURL)
+				require.Empty(t, image.DownloadURL)
+			}
+		}
+		require.Len(t, store.signed, done*2)
+	}
+	repo, store := &failingRepo{detailsErr: ErrBatchNotFound}, &failingStore{}
+	_, err := NewService(repo, store).GetBatch(t.Context(), uuid.New(), uuid.New())
+	require.ErrorIs(t, err, ErrBatchNotFound)
+	require.Empty(t, store.signed)
+	repo.detailsErr = nil
+	repo.details.Images = []ImageDetails{{Status: "done", OutputKey: "output"}}
+	store.signErr = errors.New("signing unavailable")
+	_, err = NewService(repo, store).GetBatch(t.Context(), uuid.New(), uuid.New())
+	require.ErrorIs(t, err, store.signErr)
 }

@@ -37,6 +37,7 @@ func NewRouter(dbpool *pgxpool.Pool, s3Storage *storage.S3) http.Handler {
 
 	batches := r.Group("/batches", auth.RequireAPIKey(dbpool))
 	batches.GET("", batchHandler.ListBatches)
+	batches.GET("/:id", batchHandler.GetBatch)
 	batches.POST("", batchHandler.CreateBatch)
 
 	uploadHandler := upload.NewHandler(validator, s3Storage)

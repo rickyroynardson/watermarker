@@ -16,6 +16,7 @@ var (
 	ErrIdempotencyConflict = errors.New("idempotency key reused with different request")
 	ErrInvalidUploadKey    = errors.New("invalid upload key")
 	ErrUploadNotFound      = errors.New("upload not found")
+	ErrBatchNotFound       = errors.New("batch not found")
 )
 
 const (
@@ -24,12 +25,14 @@ const (
 )
 
 type batchRepository interface {
+	GetBatch(context.Context, uuid.UUID, uuid.UUID) (BatchDetails, error)
 	ListBatches(ctx context.Context, apiKeyID uuid.UUID, before, beforeID any, limit int) ([]ListBatchItem, error)
 	CreateBatch(ctx context.Context, b Batch) (Batch, error)
 	FindByIdempotencyKey(ctx context.Context, apiKeyID uuid.UUID, key string) (Batch, bool, error)
 }
 
 type objectStore interface {
+	PresignOutput(context.Context, string, bool) (string, error)
 	Promote(ctx context.Context, src, dst string) error
 	Delete(ctx context.Context, key string) error
 }
@@ -169,4 +172,33 @@ func (s *BatchService) CreateBatch(ctx context.Context, apiKeyID uuid.UUID, req 
 		}
 	}
 	return res, nil
+}
+
+func (s *BatchService) GetBatch(ctx context.Context, owner, id uuid.UUID) (BatchDetails, error) {
+	b, err := s.repository.GetBatch(ctx, owner, id)
+	if err != nil {
+		return BatchDetails{}, err
+	}
+	b.Status = "done"
+	for i := range b.Images {
+		image := &b.Images[i]
+		switch image.Status {
+		case "pending":
+			b.Status = "pending"
+		case "failed":
+			if b.Status != "pending" {
+				b.Status = "failed"
+			}
+		case "done":
+			image.PreviewURL, err = s.objects.PresignOutput(ctx, image.OutputKey, false)
+			if err != nil {
+				return BatchDetails{}, err
+			}
+			image.DownloadURL, err = s.objects.PresignOutput(ctx, image.OutputKey, true)
+			if err != nil {
+				return BatchDetails{}, err
+			}
+		}
+	}
+	return b, nil
 }

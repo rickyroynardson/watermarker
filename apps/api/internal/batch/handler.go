@@ -6,6 +6,7 @@ import (
 
 	"github.com/gin-gonic/gin"
 	"github.com/go-playground/validator/v10"
+	"github.com/google/uuid"
 	"github.com/rickyroynardson/watermarker/apps/api/internal/auth"
 	"github.com/rickyroynardson/watermarker/apps/api/internal/utils"
 	"go.uber.org/zap"
@@ -81,4 +82,23 @@ func (h *BatchHandler) CreateBatch(c *gin.Context) {
 		utils.RespondSuccess(c, http.StatusCreated, res)
 	}
 
+}
+
+func (h *BatchHandler) GetBatch(c *gin.Context) {
+	c.Header("Cache-Control", "no-store")
+	id, err := uuid.Parse(c.Param("id"))
+	if err != nil {
+		utils.RespondError(c, http.StatusBadRequest, utils.CodeInvalidRequest, "invalid batch ID")
+		return
+	}
+	res, err := h.service.GetBatch(c.Request.Context(), auth.APIKeyID(c), id)
+	switch {
+	case errors.Is(err, ErrBatchNotFound):
+		utils.RespondError(c, http.StatusNotFound, "not_found", "batch not found")
+	case err != nil:
+		zap.L().Error("get batch", zap.Error(err))
+		utils.RespondError(c, http.StatusInternalServerError, utils.CodeInternal, "something went wrong")
+	default:
+		utils.RespondSuccess(c, http.StatusOK, res)
+	}
 }

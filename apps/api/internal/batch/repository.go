@@ -125,3 +125,32 @@ func (r *BatchRepository) CreateBatch(ctx context.Context, b Batch) (Batch, erro
 
 	return b, nil
 }
+
+func (r *BatchRepository) GetBatch(ctx context.Context, owner, id uuid.UUID) (BatchDetails, error) {
+	var b BatchDetails
+	err := r.dbpool.QueryRow(ctx, `
+		SELECT id, watermark_key, created_at FROM batches
+		WHERE id = $1 AND api_key_id = $2
+	`, id, owner).Scan(&b.ID, &b.WatermarkKey, &b.CreatedAt)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return b, ErrBatchNotFound
+	}
+	if err != nil {
+		return b, err
+	}
+	rows, err := r.dbpool.Query(ctx, `
+		SELECT id, source_key, status, COALESCE(output_key, ''),
+			COALESCE(error, ''), updated_at FROM images
+		WHERE batch_id = $1 ORDER BY created_at, id
+	`, id)
+	if err != nil {
+		return b, err
+	}
+	defer rows.Close()
+	b.Images, err = pgx.CollectRows(rows, func(row pgx.CollectableRow) (ImageDetails, error) {
+		var image ImageDetails
+		err := row.Scan(&image.ID, &image.SourceKey, &image.Status, &image.OutputKey, &image.Error, &image.UpdatedAt)
+		return image, err
+	})
+	return b, err
+}

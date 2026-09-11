@@ -3,7 +3,9 @@ package storage
 import (
 	"context"
 	"errors"
+	"mime"
 	"net/url"
+	"path"
 	"time"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
@@ -112,4 +114,19 @@ func isNotFound(err error) bool {
 		}
 	}
 	return false
+}
+
+func (s *S3) PresignOutput(ctx context.Context, key string, download bool) (string, error) {
+	disposition := "inline"
+	if download {
+		disposition = "attachment"
+	}
+	res, err := s.presigner.PresignGetObject(ctx, &s3.GetObjectInput{
+		Bucket: aws.String(s.bucket), Key: aws.String(key),
+		ResponseContentDisposition: aws.String(mime.FormatMediaType(disposition, map[string]string{"filename": path.Base(key)})),
+	}, func(o *s3.PresignOptions) { o.Expires = 15 * time.Minute })
+	if err != nil {
+		return "", err
+	}
+	return res.URL, nil
 }

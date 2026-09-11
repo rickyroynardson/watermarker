@@ -1,4 +1,5 @@
 import { useRef, useState } from "react";
+import BatchDetails from "./BatchDetails";
 import { createBatch, request } from "./api";
 import type { BatchPage, Draft } from "./api";
 
@@ -13,6 +14,7 @@ export default function App() {
   const [message, setMessage] = useState("");
   const [error, setError] = useState("");
   const [created, setCreated] = useState("");
+  const [selected, setSelected] = useState("");
   const [page, setPage] = useState<BatchPage>();
   const [limit, setLimit] = useState("20");
   const draft = useRef<Draft | null>(null);
@@ -70,6 +72,7 @@ export default function App() {
               onChange={(event) => {
                 setApiKey(event.target.value);
                 setPage(undefined);
+                setSelected("");
                 resetDraft();
               }}
             />
@@ -127,7 +130,8 @@ export default function App() {
                 setMessage,
               );
               setCreated(id);
-              setMessage("Batch accepted. Load batches below to see it in your history.");
+              setSelected(id);
+              setMessage("Batch accepted. Processing status appears below.");
             });
           }}
         >
@@ -182,6 +186,8 @@ export default function App() {
         )}
       </section>
 
+      {selected && <BatchDetails key={selected + apiKey} id={selected} apiKey={apiKey.trim()} />}
+
       <section className={panel} aria-labelledby="batches-heading">
         <h2 id="batches-heading">Batch history</h2>
         <fieldset disabled={busy} className="my-4 flex flex-wrap items-end gap-3">
@@ -217,6 +223,9 @@ export default function App() {
           <ul className="divide-y divide-slate-100">
             {page.batches.map((batch) => (
               <li key={batch.id} className="space-y-1 py-4 text-sm">
+                <button onClick={() => setSelected(batch.id)} aria-pressed={selected === batch.id}>
+                  View results
+                </button>
                 <p className="break-all font-mono font-medium">{batch.id}</p>
                 <p className="text-slate-500">{new Date(batch.created_at).toLocaleString()}</p>
                 <p className="break-all text-xs text-slate-500">Watermark: {batch.watermark_key}</p>
@@ -224,10 +233,6 @@ export default function App() {
             ))}
           </ul>
         )}
-        <p className="mt-4 border-t border-slate-100 pt-4 text-xs text-slate-500">
-          The API currently lists batches only. Processing status, previews, and downloads are not
-          yet available.
-        </p>
       </section>
     </main>
   );

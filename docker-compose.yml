@@ -24,6 +24,7 @@ services:
       - LOCALSTACK_AUTH_TOKEN=${LOCALSTACK_AUTH_TOKEN:?}
       - DEBUG=${DEBUG:-0}
       - PERSISTENCE=${PERSISTENCE:-0}
+      - S3_SKIP_SIGNATURE_VALIDATION=${S3_SKIP_SIGNATURE_VALIDATION:0}
     volumes:
       - localstack_data:/var/lib/localstack
       # runs once the gateway accepts traffic

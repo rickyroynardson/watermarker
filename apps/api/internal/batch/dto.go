@@ -53,3 +53,23 @@ type Image struct {
 	ID        uuid.UUID `json:"id"`
 	SourceKey string    `json:"source_key"`
 }
+
+// BatchDetails includes signed output links only for completed images.
+type BatchDetails struct {
+	ID           uuid.UUID      `json:"id"`
+	WatermarkKey string         `json:"watermark_key"`
+	CreatedAt    time.Time      `json:"created_at"`
+	Status       string         `json:"status"`
+	Images       []ImageDetails `json:"images"`
+}
+
+type ImageDetails struct {
+	ID          uuid.UUID `json:"id"`
+	SourceKey   string    `json:"source_key"`
+	Status      string    `json:"status"`
+	OutputKey   string    `json:"-"`
+	Error       string    `json:"error,omitempty"`
+	UpdatedAt   time.Time `json:"updated_at"`
+	PreviewURL  string    `json:"preview_url,omitempty"`
+	DownloadURL string    `json:"download_url,omitempty"`
+}

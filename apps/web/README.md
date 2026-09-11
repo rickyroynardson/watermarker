@@ -1,7 +1,7 @@
 # Web
 
 Minimal React + TypeScript UI for every current API endpoint: ping, presign/upload,
-create batch, and cursor-paginated batch history. Vite, Tailwind CSS, Oxlint, and
+create batch, cursor-paginated batch history, and batch results. Vite, Tailwind CSS, Oxlint, and
 Oxfmt; no router, component library, or state/query library.
 
 ## Run
@@ -25,7 +25,12 @@ The API consumer and Python worker must also be running for processing.
 Uploads are sequential and successful uploads are reused on retry. The same
 idempotency key is retained until you change files or credentials or reload.
 After an uncertain submission, retry before changing files or reloading.
-Batch status and output downloads need backend endpoints; the current API exposes neither.
+New batches open their results automatically. Use **View results** in history to
+reopen a batch. Results show per-image pending/done/failed status, worker errors,
+previews, and individual downloads. Pending batches poll every 3 seconds; terminal
+batches refresh signed links every 10 minutes. Refresh manually after a network
+error or if a link has expired. Switching batches or credentials cancels polling.
+Pending means queued or processing; the worker does not emit a separate running event.
 
 ## Browser uploads
 

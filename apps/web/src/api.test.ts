@@ -103,3 +103,23 @@ test("upload contract, safe batch retry, validation, and API errors", async () =
     globalThis.fetch = originalFetch;
   }
 });
+
+test("batch polling requests respect cancellation", async () => {
+  const originalFetch = globalThis.fetch;
+  const controller = new AbortController();
+  globalThis.fetch = async (url, init) => {
+    assert.equal(url, "/api/batches/batch-id");
+    assert.equal(new Headers(init?.headers).get("Authorization"), "Bearer secret");
+    controller.abort();
+    assert.equal(init?.signal?.aborted, true);
+    init?.signal?.throwIfAborted();
+    throw new Error("Expected cancellation");
+  };
+  try {
+    await assert.rejects(request("/batches/batch-id", "secret", { signal: controller.signal }), {
+      name: "AbortError",
+    });
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});

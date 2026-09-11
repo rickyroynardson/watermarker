@@ -7,9 +7,11 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"io"
+	"mime"
 	"mime/multipart"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -220,6 +222,83 @@ func TestBatchAPIIntegration(t *testing.T) {
 			}
 		}
 		counts(t, "unauthorized", 0, 0)
+	})
+
+	t.Run("batch details ownership status and signed downloads", func(t *testing.T) {
+		owner, token := seedKey()
+		id := uuid.New()
+		imageIDs := []uuid.UUID{uuid.New(), uuid.New(), uuid.New()}
+		_, err := db.Exec(ctx, "INSERT INTO batches (id, api_key_id, watermark_key) VALUES ($1, $2, 'sources/mark')", id, owner)
+		require.NoError(t, err)
+		for _, imageID := range imageIDs {
+			_, err := db.Exec(ctx, "INSERT INTO images (id, batch_id, source_key) VALUES ($1, $2, $3)", imageID, id, "sources/"+imageID.String())
+			require.NoError(t, err)
+		}
+		path := "/batches/" + id.String()
+		read := func() batch.BatchDetails {
+			w := request(http.MethodGet, path, token, "", "")
+			require.Equal(t, http.StatusOK, w.Code, w.Body.String())
+			require.Equal(t, "no-store", w.Header().Get("Cache-Control"))
+			var response struct {
+				Data batch.BatchDetails `json:"data"`
+			}
+			require.NoError(t, json.Unmarshal(w.Body.Bytes(), &response))
+			return response.Data
+		}
+		details := read()
+		require.Equal(t, "pending", details.Status)
+		require.Len(t, details.Images, 3)
+		for _, image := range details.Images {
+			require.Equal(t, "pending", image.Status)
+			require.Empty(t, image.PreviewURL)
+			require.Empty(t, image.DownloadURL)
+		}
+		for _, key := range []string{"", "unknown", revokedToken} {
+			checkError(t, request(http.MethodGet, path, key, "", ""), http.StatusUnauthorized, utils.CodeUnauthorized)
+		}
+		checkError(t, request(http.MethodGet, path, otherToken, "", ""), http.StatusNotFound, "not_found")
+		checkError(t, request(http.MethodGet, "/batches/"+uuid.NewString(), token, "", ""), http.StatusNotFound, "not_found")
+		checkError(t, request(http.MethodGet, "/batches/invalid", token, "", ""), http.StatusBadRequest, utils.CodeInvalidRequest)
+
+		outputKey := "processed/" + id.String() + "/" + imageIDs[0].String() + ".png"
+		_, err = s3Client.PutObject(ctx, &s3.PutObjectInput{Bucket: aws.String(bucket), Key: aws.String(outputKey), Body: strings.NewReader("processed image bytes"), ContentType: aws.String("image/png")})
+		require.NoError(t, err)
+		_, err = db.Exec(ctx, "UPDATE images SET status = 'done', output_key = $2 WHERE id = $1", imageIDs[0], outputKey)
+		require.NoError(t, err)
+		_, err = db.Exec(ctx, "UPDATE images SET status = 'failed', error = 'Invalid image' WHERE id = $1", imageIDs[1])
+		require.NoError(t, err)
+		details = read()
+		require.Equal(t, "pending", details.Status, "pending takes precedence over failures")
+		for _, image := range details.Images {
+			if image.Status != "done" {
+				require.Empty(t, image.PreviewURL)
+				require.Empty(t, image.DownloadURL)
+				if image.Status == "failed" {
+					require.Equal(t, "Invalid image", image.Error)
+				}
+				continue
+			}
+			for disposition, link := range map[string]string{"inline": image.PreviewURL, "attachment": image.DownloadURL} {
+				parsed, err := url.Parse(link)
+				require.NoError(t, err)
+				require.Equal(t, "900", parsed.Query().Get("X-Amz-Expires"))
+				require.NotEmpty(t, parsed.Query().Get("X-Amz-Signature"))
+				response, err := http.Get(link)
+				require.NoError(t, err)
+				contents, err := io.ReadAll(response.Body)
+				response.Body.Close()
+				require.NoError(t, err)
+				require.Equal(t, http.StatusOK, response.StatusCode)
+				require.Equal(t, "processed image bytes", string(contents))
+				kind, params, err := mime.ParseMediaType(response.Header.Get("Content-Disposition"))
+				require.NoError(t, err)
+				require.Equal(t, disposition, kind)
+				require.Equal(t, image.ID.String()+".png", params["filename"])
+			}
+		}
+		_, err = db.Exec(ctx, "UPDATE images SET status = 'failed', error = 'Invalid image' WHERE id = $1", imageIDs[2])
+		require.NoError(t, err)
+		require.Equal(t, "failed", read().Status)
 	})
 
 	t.Run("create retry conflict and ownership", func(t *testing.T) {

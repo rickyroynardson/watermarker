@@ -1,5 +1,17 @@
 export type Batch = { id: string; watermark_key: string; created_at: string };
 export type BatchPage = { batches: Batch[] | null; next_cursor: string | null };
+export type BatchDetails = Batch & {
+  status: "pending" | "done" | "failed";
+  images: {
+    id: string;
+    source_key: string;
+    status: "pending" | "done" | "failed";
+    error?: string;
+    updated_at: string;
+    preview_url?: string;
+    download_url?: string;
+  }[];
+};
 type Upload = { key: string; url: string; fields: Record<string, string> };
 
 export async function request<T>(path: string, apiKey = "", init: RequestInit = {}): Promise<T> {
@@ -9,7 +21,9 @@ export async function request<T>(path: string, apiKey = "", init: RequestInit = 
   const response = await fetch(`/api${path}`, {
     ...init,
     headers,
-    signal: AbortSignal.timeout(60_000),
+    signal: init.signal
+      ? AbortSignal.any([init.signal, AbortSignal.timeout(60_000)])
+      : AbortSignal.timeout(60_000),
   });
   const body = await response.json().catch(() => null);
   if (!response.ok)
