@@ -1,4 +1,16 @@
 services:
+  prometheus:
+    image: prom/prometheus:latest
+    command:
+      - --config.file=/etc/prometheus/prometheus.yml
+      - --storage.tsdb.retention.time=7d
+      - --web.enable-otlp-receiver
+    ports:
+      - 9090:9090
+    volumes:
+      - ./prometheus-config.yaml:/etc/prometheus/prometheus.yml:ro
+      - prometheus_data:/prometheus
+
   loki:
     image: grafana/loki:3.7.7
     ports:
@@ -36,5 +48,6 @@ services:
       - loki
 
 volumes:
+  prometheus_data:
   loki_data:
   grafana_data:

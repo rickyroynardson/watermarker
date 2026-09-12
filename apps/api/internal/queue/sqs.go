@@ -3,6 +3,7 @@ package queue
 import (
 	"context"
 	"errors"
+	"github.com/rickyroynardson/watermarker/apps/api/internal/metrics"
 	"time"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
@@ -27,8 +28,10 @@ func NewSQS(ctx context.Context, queueURL string) (*SQS, error) {
 	return &SQS{client: sqs.NewFromConfig(cfg), queueURL: queueURL}, nil
 }
 
-func (q *SQS) Send(ctx context.Context, body string) error {
-	_, err := q.client.SendMessage(ctx, &sqs.SendMessageInput{
+func (q *SQS) Send(ctx context.Context, body string) (err error) {
+	start := time.Now()
+	defer func() { metrics.Message(ctx, "publish_job", start, err) }()
+	_, err = q.client.SendMessage(ctx, &sqs.SendMessageInput{
 		QueueUrl: aws.String(q.queueURL), MessageBody: aws.String(body),
 	})
 	return err

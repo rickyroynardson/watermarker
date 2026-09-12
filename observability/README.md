@@ -1,4 +1,4 @@
-# Logs
+# Logs and metrics
 
 Go Zap / Python logging → OTLP over HTTP → OpenTelemetry Collector → Loki → Grafana.
 Loki's [native OTLP ingestion](https://grafana.com/docs/loki/latest/send-data/otel/)
@@ -12,6 +12,7 @@ keeps messages, severity, and structured attributes. No application-specific Lok
 
    ```dotenv
    OTEL_EXPORTER_OTLP_ENDPOINT=http://localhost:4318
+   OTEL_METRIC_EXPORT_INTERVAL=15000
    OTEL_RESOURCE_ATTRIBUTES=deployment.environment.name=development
    ```
 
@@ -25,7 +26,7 @@ keeps messages, severity, and structured attributes. No application-specific Lok
    appear for all three processes. Allow a few seconds for batching and refresh.
 
 Run `python3 observability/smoke.py` to independently send a test log through the
-collector and verify that Loki returns it. It requires the observability stack,
+collector and verify that Loki returns it, then verify a metric in Prometheus. It requires the observability stack,
 but no application, database, AWS credentials, or third-party Python packages.
 
 Stop with `make observability-down`; Docker volumes retain logs and Grafana state.
@@ -68,17 +69,50 @@ Recovery logs omit panic values because they can contain request data.
   unauthenticated Loki/OTLP, and stores data on local Docker volumes. For remote
   deployment, configure TLS/authentication, storage capacity, and backups or point
   the collector at a managed backend. Do not expose this Compose stack publicly.
-- This implements logs only. Metrics, traces, distributed trace propagation, and
-  alerts can be added when there is a concrete operational question to answer.
+- Traces, distributed trace propagation, queue backlog metrics, and alerts are not configured.
 
 ## Checks
 
 ```sh
 (cd apps/api && go test -short ./...)
 (cd apps/worker && uv run --frozen --offline python -m unittest discover -s tests)
-docker compose -p watermarker-observability -f observability/compose.yml config --quiet
+docker compose -p watermarker-observability -f observability/docker-compose.yml config --quiet
 python3 observability/smoke.py
 ```
 
 The exporter tests use loopback OTLP receivers to verify service identity,
 structured fields, severity/exception data, level filtering, and shutdown flush.
+
+## Metrics
+
+Services → OTLP/HTTP → Collector → Prometheus → Grafana.
+Prometheus uses its [native OTLP receiver](https://prometheus.io/docs/guides/opentelemetry/).
+Run `make observability-up`, restart all three services, and open
+[Watermarker metrics](http://localhost:3000/d/watermarker-metrics).
+Use the same OTLP endpoint as logs. Export defaults to 60 seconds; the example
+above sets 15 seconds. Rate charts need at least two exports and some traffic.
+Prometheus is available at http://localhost:9090 and retains data for seven days.
+
+Histograms provide counts, rates, and p95 duration without separate counters:
+
+- `watermarker_http_request_duration_seconds`: API requests by method, route template,
+  and status (including 4xx/5xx). Unknown methods and unmatched routes use fixed labels.
+- `watermarker_message_duration_seconds`: consumer `publish_job` SQS send calls and
+  `process_result` handler calls, by `success`/`error`. Result handling excludes SQS
+  acknowledgment; publishing excludes the outbox transaction. Poll failures remain logs.
+- `watermarker_job_duration_seconds`: worker attempts including result publishing and
+  acknowledgment, by `done`, `failed` (invalid image), or `error` (exception, including
+  malformed jobs and acknowledgment failures). Duplicate deliveries count as attempts.
+
+Each metric has `_count`, `_sum`, and `_bucket` series. Service identity and a unique
+process instance distinguish replicas. Image/batch IDs and error text are never labels.
+No endpoint means metrics are disabled. Normal shutdown flushes metrics; crashes can
+lose measurements since the last export. This is operational telemetry, not accounting.
+
+If every metrics panel shows no data, run `python3 observability/smoke.py`.
+The Prometheus service must keep `--web.enable-otlp-receiver`; without it the
+Collector receives HTTP 404 and drops metrics. After changing Compose commands,
+run `make observability-up` to recreate the container (a restart alone is insufficient).
+Grafana's Prometheus data source uses a 60-second interval to match the default
+SDK export interval, giving rate queries enough samples. Idle services have no
+latency observations until they handle work.

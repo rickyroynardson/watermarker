@@ -1,6 +1,7 @@
 package httpapi
 
 import (
+	"github.com/rickyroynardson/watermarker/apps/api/internal/metrics"
 	"io"
 	"net/http"
 	"time"
@@ -20,6 +21,7 @@ func NewRouter(dbpool *pgxpool.Pool, s3Storage *storage.S3) http.Handler {
 	r.Use(func(c *gin.Context) {
 		start := time.Now()
 		c.Next()
+		metrics.HTTP(c.Request.Context(), c.Request.Method, c.FullPath(), c.Writer.Status(), time.Since(start))
 		// Route templates avoid collecting query strings, credentials, or arbitrary URLs.
 		zap.L().Info("HTTP request", zap.String("http.request.method", c.Request.Method),
 			zap.String("http.route", c.FullPath()), zap.Int("http.response.status_code", c.Writer.Status()),

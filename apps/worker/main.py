@@ -7,7 +7,7 @@ from threading import Event
 import boto3
 from botocore.config import Config
 from worker.consumer import Worker
-from worker.telemetry import configure_logging
+from worker.telemetry import configure_logging, configure_metrics
 
 log = logging.getLogger(__name__)
 
@@ -52,5 +52,5 @@ def main():
 
 
 if __name__ == "__main__":
-    with configure_logging():
+    with configure_logging(), configure_metrics():
         main()

@@ -4,7 +4,9 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"github.com/rickyroynardson/watermarker/apps/api/internal/metrics"
 	"strings"
+	"time"
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -49,7 +51,9 @@ func NewResultHandler(db *pgxpool.Pool) *ResultHandler {
 	return &ResultHandler{db: db}
 }
 
-func (h *ResultHandler) Handle(ctx context.Context, body string) error {
+func (h *ResultHandler) Handle(ctx context.Context, body string) (err error) {
+	start := time.Now()
+	defer func() { metrics.Message(ctx, "process_result", start, err) }()
 	var result Result
 	if err := json.Unmarshal([]byte(body), &result); err != nil {
 		return err

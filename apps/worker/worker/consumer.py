@@ -5,8 +5,10 @@ import logging
 from contextlib import contextmanager
 from functools import lru_cache
 from threading import Event, Thread
+from time import perf_counter
 
 from botocore.exceptions import ClientError
+from opentelemetry import metrics
 
 from .messages import Job
 from .watermark import MAX_BYTES, InvalidImage, composite
@@ -14,6 +16,11 @@ from .watermark import MAX_BYTES, InvalidImage, composite
 log = logging.getLogger(__name__)
 VISIBILITY_SECONDS = 120
 HEARTBEAT_SECONDS = 40
+
+job_duration = metrics.get_meter("watermarker").create_histogram(
+    "watermarker.job.duration", unit="s",
+    explicit_bucket_boundaries_advisory=(.01, .05, .1, .5, 1, 5, 10, 30, 60, 120),
+)
 
 
 class Worker:
@@ -48,28 +55,34 @@ class Worker:
             raise
 
     def process(self, message: dict) -> None:
-        job = Job.parse(message["Body"])
-        result = job.result()
-        if not self.output_exists(job.output_key):
-            try:
-                output = composite(self.download(job.source_key), self.watermark(job.watermark_key))
-            except InvalidImage as exc:
-                result = job.result(str(exc))
-            else:
+        start = perf_counter()
+        outcome = "error"
+        try:
+            job = Job.parse(message["Body"])
+            result = job.result()
+            if not self.output_exists(job.output_key):
                 try:
-                    self.s3.put_object(
-                        Bucket=self.bucket, Key=job.output_key, Body=output,
-                        ContentType="image/png", IfNoneMatch="*",
-                    )
-                except ClientError as exc:
-                    # Another delivery finished first. Other failures remain retryable.
-                    if exc.response["Error"]["Code"] not in ("PreconditionFailed", "412"):
-                        raise
-        self.sqs.send_message(QueueUrl=self.results_url, MessageBody=json.dumps(result))
-        self.sqs.delete_message(QueueUrl=self.jobs_url, ReceiptHandle=message["ReceiptHandle"])
-        log.info("image processed", extra={
-            "image_id": job.image_id, "batch_id": job.batch_id, "status": result["status"],
-        })
+                    output = composite(self.download(job.source_key), self.watermark(job.watermark_key))
+                except InvalidImage as exc:
+                    result = job.result(str(exc))
+                else:
+                    try:
+                        self.s3.put_object(
+                            Bucket=self.bucket, Key=job.output_key, Body=output,
+                            ContentType="image/png", IfNoneMatch="*",
+                        )
+                    except ClientError as exc:
+                        # Another delivery finished first. Other failures remain retryable.
+                        if exc.response["Error"]["Code"] not in ("PreconditionFailed", "412"):
+                            raise
+            self.sqs.send_message(QueueUrl=self.results_url, MessageBody=json.dumps(result))
+            self.sqs.delete_message(QueueUrl=self.jobs_url, ReceiptHandle=message["ReceiptHandle"])
+            outcome = result["status"]
+            log.info("image processed", extra={
+                "image_id": job.image_id, "batch_id": job.batch_id, "status": result["status"],
+            })
+        finally:
+            job_duration.record(perf_counter() - start, {"outcome": outcome})
 
     @contextmanager
     def visibility_heartbeat(self, receipt: str):

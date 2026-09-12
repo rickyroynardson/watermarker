@@ -14,6 +14,8 @@ processors:
     send_batch_size: 512
 
 exporters:
+  otlphttp/prometheus:
+    endpoint: http://prometheus:9090/api/v1/otlp
   otlphttp/loki:
     endpoint: http://loki:3100/otlp
     # ponytail: bounded memory queue; add persistent storage for durable delivery.
@@ -24,6 +26,10 @@ exporters:
 
 service:
   pipelines:
+    metrics:
+      receivers: [otlp]
+      processors: [memory_limiter, batch]
+      exporters: [otlphttp/prometheus]
     logs:
       receivers: [otlp]
       processors: [memory_limiter, batch]
