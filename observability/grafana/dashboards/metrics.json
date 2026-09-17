@@ -55,17 +55,19 @@
       "targets": [
         {
           "refId": "A",
-          "expr": "histogram_quantile(0.95, sum by (le, route) (rate(watermarker_http_request_duration_seconds_bucket[$__rate_interval])))",
+          "expr": "(histogram_quantile(0.95, sum by (le, route) (rate(watermarker_http_request_duration_seconds_bucket[$__rate_interval])))) >= 0",
           "legendFormat": "{{route}}"
         }
       ],
       "fieldConfig": {
         "defaults": {
           "unit": "s",
-          "min": 0
+          "min": 0,
+          "noValue": "No recent observations"
         },
         "overrides": []
-      }
+      },
+      "description": "Estimated percentile from histogram buckets. No observations in the recent rate window means no latency value; it does not mean zero seconds. Rates need at least two exports (60 seconds apart by default)."
     },
     {
       "id": 3,
@@ -113,17 +115,19 @@
       "targets": [
         {
           "refId": "A",
-          "expr": "histogram_quantile(0.95, sum by (le, operation) (rate(watermarker_message_duration_seconds_bucket[$__rate_interval])))",
+          "expr": "(histogram_quantile(0.95, sum by (le, operation) (rate(watermarker_message_duration_seconds_bucket[$__rate_interval])))) >= 0",
           "legendFormat": "{{operation}}"
         }
       ],
       "fieldConfig": {
         "defaults": {
           "unit": "s",
-          "min": 0
+          "min": 0,
+          "noValue": "No recent observations"
         },
         "overrides": []
-      }
+      },
+      "description": "Estimated percentile from histogram buckets. No observations in the recent rate window means no latency value; it does not mean zero seconds. Rates need at least two exports (60 seconds apart by default)."
     },
     {
       "id": 5,
@@ -171,16 +175,160 @@
       "targets": [
         {
           "refId": "A",
-          "expr": "histogram_quantile(0.95, sum by (le) (rate(watermarker_job_duration_seconds_bucket[$__rate_interval])))",
+          "expr": "(histogram_quantile(0.95, sum by (le) (rate(watermarker_job_duration_seconds_bucket[$__rate_interval])))) >= 0",
           "legendFormat": "p95"
         }
       ],
       "fieldConfig": {
         "defaults": {
           "unit": "s",
+          "min": 0,
+          "noValue": "No recent observations"
+        },
+        "overrides": []
+      },
+      "description": "Estimated percentile from histogram buckets. No observations in the recent rate window means no latency value; it does not mean zero seconds. Rates need at least two exports (60 seconds apart by default)."
+    },
+    {
+      "id": 7,
+      "title": "Batch completion p50",
+      "type": "timeseries",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "gridPos": {
+        "x": 0,
+        "y": 24,
+        "w": 12,
+        "h": 8
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "(histogram_quantile(0.5, sum by (le, outcome) (rate(watermarker_batch_duration_seconds_bucket[$__rate_interval])))) >= 0",
+          "legendFormat": "{{outcome}}"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "s",
+          "min": 0,
+          "noValue": "No recent observations"
+        },
+        "overrides": []
+      },
+      "description": "Estimated percentile from histogram buckets. No observations in the recent rate window means no latency value; it does not mean zero seconds. Rates need at least two exports (60 seconds apart by default)."
+    },
+    {
+      "id": 8,
+      "title": "Batch completion p95",
+      "type": "timeseries",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "gridPos": {
+        "x": 12,
+        "y": 24,
+        "w": 12,
+        "h": 8
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "(histogram_quantile(0.95, sum by (le, outcome) (rate(watermarker_batch_duration_seconds_bucket[$__rate_interval])))) >= 0",
+          "legendFormat": "{{outcome}}"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "s",
+          "min": 0,
+          "noValue": "No recent observations"
+        },
+        "overrides": []
+      },
+      "description": "Estimated percentile from histogram buckets. No observations in the recent rate window means no latency value; it does not mean zero seconds. Rates need at least two exports (60 seconds apart by default)."
+    },
+    {
+      "id": 9,
+      "title": "Observed batch completions since process start",
+      "description": "Cumulative observations from currently exporting process instances, grouped by outcome. Resets on process restart; not a durable database total.",
+      "type": "stat",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "gridPos": {
+        "x": 0,
+        "y": 32,
+        "w": 12,
+        "h": 5
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "sum by (outcome) (watermarker_batch_duration_seconds_count)",
+          "legendFormat": "{{outcome}}",
+          "instant": true
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
           "min": 0
         },
         "overrides": []
+      },
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        }
+      }
+    },
+    {
+      "id": 10,
+      "title": "Observed worker attempts since process start",
+      "description": "Cumulative observations from currently exporting process instances, grouped by outcome. Resets on process restart; not a durable database total.",
+      "type": "stat",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "gridPos": {
+        "x": 12,
+        "y": 32,
+        "w": 12,
+        "h": 5
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "sum by (outcome) (watermarker_job_duration_seconds_count)",
+          "legendFormat": "{{outcome}}",
+          "instant": true
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "min": 0
+        },
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        }
       }
     }
   ]

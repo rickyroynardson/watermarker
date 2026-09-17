@@ -1,4 +1,10 @@
-export type Batch = { id: string; watermark_key: string; created_at: string };
+export type Batch = {
+  id: string;
+  watermark_key: string;
+  created_at: string;
+  completed_at?: string | null;
+  duration_seconds?: number | null;
+};
 export type BatchPage = { batches: Batch[] | null; next_cursor: string | null };
 export type BatchDetails = Batch & {
   status: "pending" | "done" | "failed";

@@ -18,6 +18,7 @@ func TestMeasurements(t *testing.T) {
 	defer provider.Shutdown(context.Background())
 	HTTP(context.Background(), "arbitrary-method", "", 404, time.Second)
 	Message(context.Background(), "process_result", time.Now(), errors.New("private error"))
+	BatchCompleted(context.Background(), 12.5, true)
 	var data metricdata.ResourceMetrics
 	if err := reader.Collect(context.Background(), &data); err != nil {
 		t.Fatal(err)
@@ -36,6 +37,11 @@ func TestMeasurements(t *testing.T) {
 				if method.AsString() != "_OTHER" || route.AsString() != "unmatched" || h.DataPoints[0].Sum != 1 {
 					t.Fatal(m)
 				}
+			} else if m.Name == "watermarker.batch.duration" {
+				outcome, _ := attrs.Value("outcome")
+				if outcome.AsString() != "failed" || attrs.Len() != 1 || h.DataPoints[0].Sum != 12.5 {
+					t.Fatal(m)
+				}
 			} else {
 				outcome, _ := attrs.Value("outcome")
 				if outcome.AsString() != "error" || attrs.Len() != 2 {
@@ -45,7 +51,7 @@ func TestMeasurements(t *testing.T) {
 			seen++
 		}
 	}
-	if seen != 2 {
+	if seen != 3 {
 		t.Fatalf("got %d metrics", seen)
 	}
 }

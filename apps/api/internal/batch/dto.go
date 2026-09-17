@@ -8,9 +8,11 @@ import (
 )
 
 type ListBatchItem struct {
-	ID           uuid.UUID `json:"id"`
-	WatermarkKey string    `json:"watermark_key"`
-	CreatedAt    time.Time `json:"created_at"`
+	CompletedAt     *time.Time `json:"completed_at"`
+	DurationSeconds *float64   `json:"duration_seconds"`
+	ID              uuid.UUID  `json:"id"`
+	WatermarkKey    string     `json:"watermark_key"`
+	CreatedAt       time.Time  `json:"created_at"`
 }
 
 type ListBatchesRequest struct {
@@ -56,11 +58,13 @@ type Image struct {
 
 // BatchDetails includes signed output links only for completed images.
 type BatchDetails struct {
-	ID           uuid.UUID      `json:"id"`
-	WatermarkKey string         `json:"watermark_key"`
-	CreatedAt    time.Time      `json:"created_at"`
-	Status       string         `json:"status"`
-	Images       []ImageDetails `json:"images"`
+	CompletedAt     *time.Time     `json:"completed_at"`
+	DurationSeconds *float64       `json:"duration_seconds"`
+	ID              uuid.UUID      `json:"id"`
+	WatermarkKey    string         `json:"watermark_key"`
+	CreatedAt       time.Time      `json:"created_at"`
+	Status          string         `json:"status"`
+	Images          []ImageDetails `json:"images"`
 }
 
 type ImageDetails struct {

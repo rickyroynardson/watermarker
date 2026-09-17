@@ -116,3 +116,29 @@ run `make observability-up` to recreate the container (a restart alone is insuff
 Grafana's Prometheus data source uses a 60-second interval to match the default
 SDK export interval, giving rate queries enough samples. Idle services have no
 latency observations until they handle work.
+
+Batch completion is recorded by the result consumer after every image reaches
+`done` or `failed`. `watermarker_batch_duration_seconds` measures wall-clock time
+from batch database creation (after upload promotion) to the terminal update,
+including outbox delay and queue waiting. Grafana shows p50/p95 by `done`/`failed`.
+It excludes uploads and does not sum concurrent image durations.
+
+Apply `make migrate-up` before restarting the updated API and consumer. Batch list
+and detail responses include nullable `completed_at` and `duration_seconds`; the
+results page shows the completed duration. Existing terminal batches are backfilled
+from their last image update without replaying historical metrics. Concurrent and
+repeated results preserve the first completion timestamp. The database timestamp is
+durable; the histogram is best effort and can miss a completion if the consumer
+crashes after committing but before exporting it.
+
+Loki can return `Ingester is shutting down` when WAL disk usage exceeds its
+90% safety threshold, even while `/ready` returns success. Check
+`loki_ingester_wal_disk_usage_percent` at http://localhost:3100/metrics and free
+space on the Docker host. Restarting alone does not fix disk pressure; keep the
+threshold enabled. Logs already dropped after retry exhaustion cannot be recovered
+from the Collector.
+
+Latency percentiles require observations between exports inside the recent rate
+window. Idle panels show no observations rather than NaN or a fabricated zero.
+The worker/batch totals show cumulative observations from active process instances
+and reset on restart; exact batch duration remains available in the application.

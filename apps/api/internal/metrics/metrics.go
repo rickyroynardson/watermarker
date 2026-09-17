@@ -64,3 +64,15 @@ func Message(ctx context.Context, operation string, start time.Time, err error) 
 	}
 	messageDuration.Record(ctx, time.Since(start).Seconds(), metric.WithAttributes(attribute.String("operation", operation), attribute.String("outcome", outcome)))
 }
+
+var batchDuration, _ = meter.Float64Histogram("watermarker.batch.duration", metric.WithUnit("s"), metric.WithExplicitBucketBoundaries(1, 5, 10, 30, 60, 120, 300, 600, 1800, 3600))
+
+// BatchCompleted runs after the terminal database transaction commits.
+// Metrics are best effort: a crash between commit and export can lose an observation.
+func BatchCompleted(ctx context.Context, seconds float64, failed bool) {
+	outcome := "done"
+	if failed {
+		outcome = "failed"
+	}
+	batchDuration.Record(ctx, seconds, metric.WithAttributes(attribute.String("outcome", outcome)))
+}

@@ -21,7 +21,8 @@ func NewRepository(db *pgxpool.Pool) *BatchRepository {
 
 func (r *BatchRepository) ListBatches(ctx context.Context, apiKeyID uuid.UUID, before, beforeID any, limit int) ([]ListBatchItem, error) {
 	const q = `
-		SELECT id, watermark_key, created_at
+		SELECT id, watermark_key, created_at, completed_at,
+ EXTRACT(EPOCH FROM (completed_at - created_at))::double precision AS duration_seconds
 		FROM batches
 		WHERE api_key_id = $1
 			AND ($2::timestamptz IS NULL OR (created_at, id) < ($2, $3::uuid))
@@ -129,9 +130,10 @@ func (r *BatchRepository) CreateBatch(ctx context.Context, b Batch) (Batch, erro
 func (r *BatchRepository) GetBatch(ctx context.Context, owner, id uuid.UUID) (BatchDetails, error) {
 	var b BatchDetails
 	err := r.dbpool.QueryRow(ctx, `
-		SELECT id, watermark_key, created_at FROM batches
+		SELECT id, watermark_key, created_at, completed_at,
+ EXTRACT(EPOCH FROM (completed_at - created_at))::double precision AS duration_seconds FROM batches
 		WHERE id = $1 AND api_key_id = $2
-	`, id, owner).Scan(&b.ID, &b.WatermarkKey, &b.CreatedAt)
+	`, id, owner).Scan(&b.ID, &b.WatermarkKey, &b.CreatedAt, &b.CompletedAt, &b.DurationSeconds)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return b, ErrBatchNotFound
 	}

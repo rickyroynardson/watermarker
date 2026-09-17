@@ -72,6 +72,12 @@ export default function BatchDetails({ id, apiKey }: { id: string; apiKey: strin
               {done} of {batch.images.length} completed · {failed} failed ·{" "}
               {batch.images.length - done - failed} pending
             </p>
+            {batch.duration_seconds != null && (
+              <p className="text-slate-600">
+                Finished in {batch.duration_seconds.toFixed(1)} seconds after submission (excludes
+                uploads).
+              </p>
+            )}
             <progress
               className="mt-2 w-full accent-slate-900"
               aria-label="Images finished processing"

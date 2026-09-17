@@ -4,11 +4,13 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
-	"github.com/rickyroynardson/watermarker/apps/api/internal/metrics"
 	"strings"
 	"time"
 
+	"github.com/rickyroynardson/watermarker/apps/api/internal/metrics"
+
 	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
@@ -61,22 +63,53 @@ func (h *ResultHandler) Handle(ctx context.Context, body string) (err error) {
 	if err := result.Validate(); err != nil {
 		return err
 	}
-	// the first terminal result wins, including when consumers race. A repeated
-	// result after a failed SQS acknowledgement must not change updated_at either.
-	tag, err := h.db.Exec(ctx, `
+	tx, err := h.db.Begin(ctx)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback(ctx)
+	// Serialize result commits per batch so concurrent final images cannot miss completion.
+	// per-batch lock and image scan; use terminal counters if large batches contend.
+	var batchID uuid.UUID
+	if err := tx.QueryRow(ctx, "SELECT id FROM batches WHERE id = $1 FOR UPDATE", result.BatchID).Scan(&batchID); err != nil {
+		return err
+	}
+	tag, err := tx.Exec(ctx, `
 		UPDATE images SET status = $3, output_key = NULLIF($4, ''),
-			error = NULLIF($5, ''), updated_at = now()
+			error = NULLIF($5, ''), updated_at = clock_timestamp()
 		WHERE id = $1 AND batch_id = $2 AND status = 'pending';
 	`, result.ImageID, result.BatchID, result.Status, result.OutputKey, result.Error)
-	if err != nil || tag.RowsAffected() != 0 {
+	if err != nil {
 		return err
 	}
-	var exists bool
-	if err := h.db.QueryRow(ctx, "SELECT EXISTS (SELECT 1 FROM images WHERE id = $1 AND batch_id = $2)", result.ImageID, result.BatchID).Scan(&exists); err != nil {
+	if tag.RowsAffected() == 0 {
+		var exists bool
+		if err := tx.QueryRow(ctx, "SELECT EXISTS (SELECT 1 FROM images WHERE id = $1 AND batch_id = $2)", result.ImageID, result.BatchID).Scan(&exists); err != nil {
+			return err
+		}
+		if !exists {
+			return errors.New("result references an unknown image or batch")
+		}
+		return tx.Commit(ctx)
+	}
+	var seconds float64
+	var failed bool
+	err = tx.QueryRow(ctx, `
+		UPDATE batches b SET completed_at = clock_timestamp()
+		WHERE id = $1 AND completed_at IS NULL
+		  AND NOT EXISTS (SELECT 1 FROM images WHERE batch_id = b.id AND status = 'pending')
+		RETURNING EXTRACT(EPOCH FROM (completed_at - created_at))::double precision,
+		  EXISTS (SELECT 1 FROM images WHERE batch_id = b.id AND status = 'failed')
+	`, result.BatchID).Scan(&seconds, &failed)
+	completed := err == nil
+	if err != nil && !errors.Is(err, pgx.ErrNoRows) {
 		return err
 	}
-	if !exists {
-		return errors.New("result references an unknown image or batch")
+	if err := tx.Commit(ctx); err != nil {
+		return err
+	}
+	if completed {
+		metrics.BatchCompleted(ctx, seconds, failed)
 	}
 	return nil
 }

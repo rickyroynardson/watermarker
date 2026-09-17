@@ -46,6 +46,53 @@ func testPipeline(t *testing.T, ctx context.Context, originalDB *pgxpool.Pool, s
 		return count
 	}
 
+	t.Run("batch completion survives concurrent final results and duplicates", func(t *testing.T) {
+		b := newBatch()
+		b.Images = append(b.Images, batch.Image{ID: uuid.New(), SourceKey: "sources/" + owner.String() + "/" + uuid.NewString()}, batch.Image{ID: uuid.New(), SourceKey: "sources/" + owner.String() + "/" + uuid.NewString()})
+		_, err := repo.CreateBatch(ctx, b)
+		require.NoError(t, err)
+		handler := image.NewResultHandler(db)
+		bodies := make([]string, len(b.Images))
+		for i, img := range b.Images {
+			result := image.Result{Version: 1, JobType: "composite", BatchID: b.ID, ImageID: img.ID, Status: "failed", Error: "invalid image"}
+			if i == 0 {
+				result.Status = "done"
+				result.Error = ""
+				result.OutputKey = "processed/" + b.ID.String() + "/" + img.ID.String() + ".png"
+			}
+			raw, err := json.Marshal(result)
+			require.NoError(t, err)
+			bodies[i] = string(raw)
+		}
+		require.NoError(t, handler.Handle(ctx, bodies[0]))
+		pending, err := repo.GetBatch(ctx, owner, b.ID)
+		require.NoError(t, err)
+		require.Nil(t, pending.CompletedAt)
+		require.Nil(t, pending.DurationSeconds)
+		errs := make(chan error, 2)
+		for _, body := range bodies[1:] {
+			go func(body string) { errs <- handler.Handle(ctx, body) }(body)
+		}
+		for range 2 {
+			require.NoError(t, <-errs)
+		}
+		completed, err := repo.GetBatch(ctx, owner, b.ID)
+		require.NoError(t, err)
+		require.NotNil(t, completed.CompletedAt)
+		require.NotNil(t, completed.DurationSeconds)
+		require.GreaterOrEqual(t, *completed.DurationSeconds, 0.0)
+		for _, body := range bodies {
+			require.NoError(t, handler.Handle(ctx, body))
+		}
+		repeated, err := repo.GetBatch(ctx, owner, b.ID)
+		require.NoError(t, err)
+		require.Equal(t, completed.CompletedAt, repeated.CompletedAt)
+		require.Equal(t, completed.DurationSeconds, repeated.DurationSeconds)
+		// Keep the existing outbox scenarios isolated.
+		_, err = db.Exec(ctx, "DELETE FROM batches WHERE id = $1", b.ID)
+		require.NoError(t, err)
+	})
+
 	t.Run("outbox insert failure rolls back images and batch", func(t *testing.T) {
 		_, err := db.Exec(ctx, "ALTER TABLE outbox_messages ADD CONSTRAINT test_reject_jobs CHECK (false) NOT VALID")
 		require.NoError(t, err)
