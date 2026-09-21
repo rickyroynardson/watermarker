@@ -54,4 +54,68 @@ func TestMeasurements(t *testing.T) {
 	if seen != 3 {
 		t.Fatalf("got %d metrics", seen)
 	}
+
+	QueueDepth(context.Background(), "jobs", [3]int64{7, 2, 1})
+	OutboxBacklog(context.Background(), 2, 120)
+	BacklogObservation(context.Background(), "jobs", nil)
+	BacklogObservation(context.Background(), "outbox", errors.New("database unavailable"))
+	data = metricdata.ResourceMetrics{}
+	if err := reader.Collect(context.Background(), &data); err != nil {
+		t.Fatal(err)
+	}
+	gauges := 0
+	for _, scope := range data.ScopeMetrics {
+		for _, m := range scope.Metrics {
+			switch m.Name {
+			case "watermarker.queue.depth":
+				points := m.Data.(metricdata.Gauge[int64]).DataPoints
+				if len(points) != 3 {
+					t.Fatal(points)
+				}
+				for _, point := range points {
+					state, _ := point.Attributes.Value("state")
+					if point.Value != map[string]int64{"visible": 7, "in_flight": 2, "delayed": 1}[state.AsString()] {
+						t.Fatal(point)
+					}
+				}
+				gauges++
+			case "watermarker.outbox.pending":
+				if m.Data.(metricdata.Gauge[int64]).DataPoints[0].Value != 2 {
+					t.Fatal(m)
+				}
+				gauges++
+			case "watermarker.outbox.oldest.age":
+				if m.Data.(metricdata.Gauge[float64]).DataPoints[0].Value != 120 {
+					t.Fatal(m)
+				}
+				gauges++
+			case "watermarker.backlog.observation.success":
+				points := m.Data.(metricdata.Gauge[int64]).DataPoints
+				if len(points) != 2 {
+					t.Fatal(points)
+				}
+				for _, point := range points {
+					source, _ := point.Attributes.Value("source")
+					expected := int64(1)
+					if source.AsString() == "outbox" {
+						expected = 0
+					}
+					if point.Value != expected {
+						t.Fatal(point)
+					}
+				}
+				gauges++
+			case "watermarker.backlog.observation.time":
+				for _, point := range m.Data.(metricdata.Gauge[int64]).DataPoints {
+					if time.Now().Unix()-point.Value > 5 {
+						t.Fatal(point)
+					}
+				}
+				gauges++
+			}
+		}
+	}
+	if gauges != 5 {
+		t.Fatalf("got %d backlog gauges", gauges)
+	}
 }

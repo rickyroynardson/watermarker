@@ -3,9 +3,12 @@ package queue
 import (
 	"context"
 	"errors"
+	"fmt"
+	"github.com/aws/aws-sdk-go-v2/service/sqs/types"
 	"github.com/rickyroynardson/watermarker/apps/api/internal/metrics"
 	"github.com/rickyroynardson/watermarker/apps/api/internal/tracing"
 	"go.opentelemetry.io/otel/trace"
+	"strconv"
 	"time"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
@@ -88,4 +91,26 @@ func (q *SQS) Consume(ctx context.Context, handle func(context.Context, string) 
 			}
 		}
 	}
+}
+
+// Depth reads approximate counts without receiving or acknowledging messages.
+func (q *SQS) Depth(ctx context.Context) ([3]int64, error) {
+	var depth [3]int64
+	names := []types.QueueAttributeName{
+		types.QueueAttributeNameApproximateNumberOfMessages,
+		types.QueueAttributeNameApproximateNumberOfMessagesNotVisible,
+		types.QueueAttributeNameApproximateNumberOfMessagesDelayed,
+	}
+	result, err := q.client.GetQueueAttributes(ctx, &sqs.GetQueueAttributesInput{QueueUrl: aws.String(q.queueURL), AttributeNames: names})
+	if err != nil {
+		return depth, err
+	}
+	for i, name := range names {
+		value, err := strconv.ParseInt(result.Attributes[string(name)], 10, 64)
+		if err != nil || value < 0 {
+			return [3]int64{}, fmt.Errorf("invalid queue count for %s", name)
+		}
+		depth[i] = value
+	}
+	return depth, nil
 }

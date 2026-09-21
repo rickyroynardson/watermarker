@@ -49,6 +49,24 @@ func testPipeline(t *testing.T, ctx context.Context, originalDB *pgxpool.Pool, s
 		return count
 	}
 
+	t.Run("outbox monitor includes delayed retries and preserves age", func(t *testing.T) {
+		count, age, err := outbox.Backlog(ctx, db)
+		require.NoError(t, err)
+		require.Zero(t, count)
+		require.Zero(t, age)
+		b, err := repo.CreateBatch(ctx, newBatch())
+		require.NoError(t, err)
+		_, err = db.Exec(ctx, "UPDATE images SET created_at = now() - interval '2 minutes' WHERE id = $1", b.Images[0].ID)
+		require.NoError(t, err)
+		_, err = db.Exec(ctx, "UPDATE outbox_messages SET next_attempt_at = now() + interval '1 hour' WHERE image_id = $1", b.Images[0].ID)
+		require.NoError(t, err)
+		count, age, err = outbox.Backlog(ctx, db)
+		require.NoError(t, err)
+		require.Equal(t, int64(1), count)
+		require.GreaterOrEqual(t, age, float64(120))
+		_, err = db.Exec(ctx, "DELETE FROM outbox_messages WHERE image_id = $1", b.Images[0].ID)
+		require.NoError(t, err)
+	})
 	t.Run("outbox preserves request trace context", func(t *testing.T) {
 		parent := tracing.Propagator.Extract(ctx, propagation.MapCarrier{
 			"traceparent": "00-0123456789abcdef0123456789abcdef-0123456789abcdef-01",

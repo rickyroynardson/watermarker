@@ -74,3 +74,14 @@ func Run(ctx context.Context, db *pgxpool.Pool, send func(context.Context, strin
 		}
 	}
 }
+
+// Backlog includes retry-delayed intents. Image creation is durable and does not
+// move when next_attempt_at is advanced after a failed send.
+func Backlog(ctx context.Context, db *pgxpool.Pool) (count int64, oldestAge float64, err error) {
+	// ponytail: scan pending intents; add a created_at index if backlog size makes this expensive.
+	err = db.QueryRow(ctx, `
+  SELECT count(*), COALESCE(GREATEST(EXTRACT(EPOCH FROM (clock_timestamp() - min(i.created_at))), 0), 0)::double precision
+  FROM outbox_messages o JOIN images i ON i.id = o.image_id
+ `).Scan(&count, &oldestAge)
+	return
+}

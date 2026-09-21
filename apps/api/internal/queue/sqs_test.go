@@ -2,6 +2,7 @@ package queue
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"net/http"
 	"net/http/httptest"
@@ -63,6 +64,31 @@ func TestPollAcknowledgesOnlySuccessfulHandling(t *testing.T) {
 			case "delete failure":
 				require.Error(t, err)
 				require.True(t, handled.Load())
+			}
+		})
+	}
+}
+
+func TestDepthIsReadOnlyAndRejectsUnknownCounts(t *testing.T) {
+	for _, value := range []string{"7", "", "bad", "-1"} {
+		t.Run(value, func(t *testing.T) {
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				require.Equal(t, "AmazonSQS.GetQueueAttributes", r.Header.Get("X-Amz-Target"))
+				w.Header().Set("Content-Type", "application/x-amz-json-1.0")
+				json.NewEncoder(w).Encode(map[string]any{"Attributes": map[string]string{
+					"ApproximateNumberOfMessages": value, "ApproximateNumberOfMessagesNotVisible": "2", "ApproximateNumberOfMessagesDelayed": "1",
+				}})
+			}))
+			defer server.Close()
+			q := &SQS{queueURL: server.URL + "/queue", client: sqs.NewFromConfig(aws.Config{
+				Region: "us-east-1", Credentials: credentials.NewStaticCredentialsProvider("test", "test", ""),
+			}, func(o *sqs.Options) { o.BaseEndpoint = aws.String(server.URL); o.RetryMaxAttempts = 1 })}
+			counts, err := q.Depth(t.Context())
+			if value == "7" {
+				require.NoError(t, err)
+				require.Equal(t, [3]int64{7, 2, 1}, counts)
+			} else {
+				require.Error(t, err)
 			}
 		})
 	}

@@ -1,0 +1,362 @@
+{
+  "uid": "watermarker-queues",
+  "title": "Watermarker queues and outbox",
+  "schemaVersion": 39,
+  "version": 3,
+  "refresh": "15s",
+  "time": {
+    "from": "now-1h",
+    "to": "now"
+  },
+  "panels": [
+    {
+      "id": 10,
+      "title": "Processing activity \u2014 cumulative successful operations",
+      "type": "timeseries",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "gridPos": {
+        "x": 0,
+        "y": 0,
+        "w": 24,
+        "h": 8
+      },
+      "description": "Recorded operations, not sampled queue depth. Each consumer instance has its own line and starts a new count on restart. Includes retries and duplicate results, not unique images. The first export may already be 1; a rise requires a later operation. Allow the consumer export interval (60 seconds by default) plus dashboard refresh.",
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "sum by (operation, instance) (watermarker_message_duration_seconds_count{outcome=\"success\"})",
+          "legendFormat": "{{operation}} \u00b7 {{instance}}"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "min": 0,
+          "decimals": 0,
+          "noValue": "No operations exported yet",
+          "custom": {
+            "drawStyle": "line",
+            "lineInterpolation": "stepAfter",
+            "showPoints": "always",
+            "pointSize": 5
+          }
+        },
+        "overrides": []
+      }
+    },
+    {
+      "id": 1,
+      "title": "Jobs queue \u2014 sampled backlog",
+      "type": "timeseries",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "gridPos": {
+        "x": 0,
+        "y": 8,
+        "w": 12,
+        "h": 8
+      },
+      "description": "SQS counts are approximate. Missing/failed or >90-second-old observations are hidden, never replaced with zero. Replica readings use max, not sum. This is current backlog, not completed work. Jobs processed between 15-second samples may never appear; see activity counters below.",
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "max by (state) ((watermarker_queue_depth{source=\"jobs\"}) and on (instance, source) ((watermarker_backlog_observation_success == 1) and on (instance, source) (time() - watermarker_backlog_observation_time_seconds < 90)))",
+          "legendFormat": "{{state}}"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "min": 0,
+          "noValue": "No fresh data"
+        },
+        "overrides": []
+      },
+      "interval": "15s"
+    },
+    {
+      "id": 2,
+      "title": "Results queue \u2014 sampled backlog",
+      "type": "timeseries",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "gridPos": {
+        "x": 12,
+        "y": 8,
+        "w": 12,
+        "h": 8
+      },
+      "description": "SQS counts are approximate. Missing/failed or >90-second-old observations are hidden, never replaced with zero. Replica readings use max, not sum. This is current backlog, not completed work. Jobs processed between 15-second samples may never appear; see activity counters below.",
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "max by (state) ((watermarker_queue_depth{source=\"results\"}) and on (instance, source) ((watermarker_backlog_observation_success == 1) and on (instance, source) (time() - watermarker_backlog_observation_time_seconds < 90)))",
+          "legendFormat": "{{state}}"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "min": 0,
+          "noValue": "No fresh data"
+        },
+        "overrides": []
+      },
+      "interval": "15s"
+    },
+    {
+      "id": 3,
+      "title": "Dead-letter queues \u2014 total messages",
+      "type": "timeseries",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "gridPos": {
+        "x": 0,
+        "y": 16,
+        "w": 12,
+        "h": 8
+      },
+      "description": "SQS counts are approximate. Missing/failed or >90-second-old observations are hidden, never replaced with zero. Replica readings use max, not sum. Includes visible, in-flight and delayed messages.",
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "sum by (source) (max by (source, state) ((watermarker_queue_depth{source=~\"jobs_dlq|results_dlq\"}) and on (instance, source) ((watermarker_backlog_observation_success == 1) and on (instance, source) (time() - watermarker_backlog_observation_time_seconds < 90))))",
+          "legendFormat": "{{source}}"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "min": 0,
+          "noValue": "No fresh data"
+        },
+        "overrides": []
+      }
+    },
+    {
+      "id": 4,
+      "title": "Pending outbox jobs",
+      "type": "timeseries",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "gridPos": {
+        "x": 12,
+        "y": 16,
+        "w": 12,
+        "h": 8
+      },
+      "description": "All committed intents, including delayed retries. Drops when SQS accepts a job; does not mean processing completed.",
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "max ((watermarker_outbox_pending) and on (instance, source) ((watermarker_backlog_observation_success == 1) and on (instance, source) (time() - watermarker_backlog_observation_time_seconds < 90)))",
+          "legendFormat": "outbox"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "min": 0,
+          "noValue": "No fresh data"
+        },
+        "overrides": []
+      }
+    },
+    {
+      "id": 5,
+      "title": "Oldest pending outbox job",
+      "type": "timeseries",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "gridPos": {
+        "x": 0,
+        "y": 24,
+        "w": 12,
+        "h": 8
+      },
+      "description": "Age since the image row was created; retries do not reset it. Zero means the outbox was successfully observed empty.",
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "max ((watermarker_outbox_oldest_age_seconds) and on (instance, source) ((watermarker_backlog_observation_success == 1) and on (instance, source) (time() - watermarker_backlog_observation_time_seconds < 90)))",
+          "legendFormat": "oldest"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "s",
+          "min": 0,
+          "noValue": "No fresh data"
+        },
+        "overrides": []
+      }
+    },
+    {
+      "id": 6,
+      "title": "Observation age",
+      "type": "timeseries",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "gridPos": {
+        "x": 12,
+        "y": 24,
+        "w": 12,
+        "h": 8
+      },
+      "description": "Time since each source was checked, including failed checks. Above 90s means stale. No data means the monitor has not exported recently.",
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "time() - max by (source) (watermarker_backlog_observation_time_seconds)",
+          "legendFormat": "{{source}}"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "s",
+          "min": 0,
+          "noValue": "No fresh data"
+        },
+        "overrides": []
+      }
+    },
+    {
+      "id": 7,
+      "title": "Source checks \u2014 1 OK / 0 failed",
+      "type": "stat",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "gridPos": {
+        "x": 0,
+        "y": 32,
+        "w": 24,
+        "h": 8
+      },
+      "description": "Read errors are not empty queues. Inspect watermarker-monitor logs for failed sources. Keep monitor running during outage experiments.",
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "max by (source) (watermarker_backlog_observation_success and on (instance, source) (time() - watermarker_backlog_observation_time_seconds < 90))",
+          "legendFormat": "{{source}}",
+          "instant": true
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "min": 0,
+          "noValue": "No fresh data"
+        },
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        }
+      }
+    },
+    {
+      "id": 8,
+      "title": "Successful job publishes since consumer start",
+      "type": "stat",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "gridPos": {
+        "x": 0,
+        "y": 40,
+        "w": 12,
+        "h": 6
+      },
+      "description": "Cumulative successful operations from currently exporting consumer instances. Resets on restart and includes retries/duplicate handling; not a count of unique completed images.",
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "sum(watermarker_message_duration_seconds_count{operation=\"publish_job\",outcome=\"success\"})",
+          "legendFormat": "operations",
+          "instant": true
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "min": 0,
+          "noValue": "No observations yet"
+        },
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        }
+      }
+    },
+    {
+      "id": 9,
+      "title": "Successful result handlers since consumer start",
+      "type": "stat",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "gridPos": {
+        "x": 12,
+        "y": 40,
+        "w": 12,
+        "h": 6
+      },
+      "description": "Cumulative successful operations from currently exporting consumer instances. Resets on restart and includes retries/duplicate handling; not a count of unique completed images.",
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "sum(watermarker_message_duration_seconds_count{operation=\"process_result\",outcome=\"success\"})",
+          "legendFormat": "operations",
+          "instant": true
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "min": 0,
+          "noValue": "No observations yet"
+        },
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        }
+      }
+    }
+  ]
+}

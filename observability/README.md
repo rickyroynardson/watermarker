@@ -69,7 +69,7 @@ Recovery logs omit panic values because they can contain request data.
   unauthenticated Loki/OTLP, and stores data on local Docker volumes. For remote
   deployment, configure TLS/authentication, storage capacity, and backups or point
   the collector at a managed backend. Do not expose this Compose stack publicly.
-- Queue backlog metrics and alerts are not configured.
+- Queue/outbox monitoring uses the separate monitor process described below. Alerts are not configured.
 
 ## Checks
 
@@ -214,3 +214,50 @@ python3 observability/smoke.py
 
 To verify persistence, copy the smoke trace's Jaeger URL, restart OpenSearch and
 Jaeger, and open that same URL again. Traces already indexed remain available.
+
+## Queue and outbox dashboard
+
+Open [Watermarker queues and outbox](http://localhost:3000/d/watermarker-queues).
+Run the monitor independently of the API, worker, and consumer so it continues
+observing when either processing service stops:
+
+```sh
+cd apps/api
+go run ./cmd/monitor
+```
+
+The monitor loads `apps/api/.env`, using the existing database, AWS credentials,
+endpoint, jobs/results URLs, and OTLP endpoint. Add `SQS_JOBS_DLQ_QUEUE_URL` and
+`SQS_RESULTS_DLQ_QUEUE_URL` with the actual dead-letter queue URLs. For our
+LocalStack setup these are the existing queue URLs with `-dlq` appended.
+All four queue URLs are required; the monitor needs `sqs:GetQueueAttributes`
+on those queues and SELECT access to `outbox_messages` and `images`.
+
+It checks each source every 15 seconds with a three-second timeout. SQS reads
+only attributes: it never receives or deletes messages. Counts are approximate
+and can lag. Visible, in-flight, and delayed messages are displayed separately;
+DLQ totals include all three. Outbox age comes from the oldest pending image's
+creation time, including intents waiting for retry. No schema migration is needed.
+
+Each source exports check success and check time. Failed checks and observations
+older than 90 seconds are excluded from backlog panels, which show no fresh data
+instead of a misleading zero. The monitor defaults to a 15-second metric export interval; an explicit
+`OTEL_METRIC_EXPORT_INTERVAL` overrides it. Keep that interval below 90 seconds. Replica observations use max rather than sum.
+Run one monitor per environment; this dashboard assumes a single environment.
+
+Repeat the outage exercises: stop the worker to see jobs accumulate; stop the
+consumer after dispatch to see results accumulate. New batches submitted while
+the consumer is stopped remain in the outbox and its oldest age increases.
+Keep the monitor running throughout. No alert notifications are configured.
+
+Queue depths are snapshots, not counts of jobs processed. A job that arrives and
+finishes between 15-second polls can leave the backlog graph at zero throughout.
+The dashboard also shows successful publish/result-handler operation totals from
+the consumer, which capture fast work. Those totals reset on process restart and
+include retries/duplicates. For a sustained-backlog test, stop the worker before
+submitting a batch and leave it stopped for at least a minute.
+
+The top processing-activity line graph uses cumulative successful consumer operations
+per instance. It captures fast jobs even when queue snapshots remain zero. The
+first exported value may already be nonzero; subsequent operations create steps.
+Consumer export still defaults to 60 seconds, independently of the monitor.
