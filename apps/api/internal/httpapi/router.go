@@ -59,6 +59,7 @@ func NewRouter(dbpool *pgxpool.Pool, s3Storage *storage.S3) http.Handler {
 	batches.GET("", batchHandler.ListBatches)
 	batches.GET("/:id", batchHandler.GetBatch)
 	batches.POST("", batchHandler.CreateBatch)
+	batches.POST("/:id/images/:imageID/retry", batchHandler.RetryImage)
 
 	uploadHandler := upload.NewHandler(validator, s3Storage)
 	r.POST("/uploads/presign", auth.RequireAPIKey(dbpool), uploadHandler.Presign)

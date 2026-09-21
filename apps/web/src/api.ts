@@ -13,6 +13,8 @@ export type BatchDetails = Batch & {
     source_key: string;
     status: "pending" | "done" | "failed";
     error?: string;
+    attempt: number;
+    retryable: boolean;
     updated_at: string;
     preview_url?: string;
     download_url?: string;

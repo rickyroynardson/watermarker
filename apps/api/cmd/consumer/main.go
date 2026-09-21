@@ -48,13 +48,21 @@ func main() {
 	if err != nil {
 		log.Fatal("configure SQS_RESULTS_QUEUE_URL", zap.Error(err))
 	}
+	deadJobs, err := queue.NewSQS(ctx, os.Getenv("SQS_JOBS_DLQ_QUEUE_URL"))
+	if err != nil {
+		log.Fatal("configure SQS_JOBS_DLQ_QUEUE_URL", zap.Error(err))
+	}
+	handler := image.NewResultHandler(db)
+	dlqDone := make(chan struct{})
+	go func() { defer close(dlqDone); deadJobs.Consume(ctx, handler.HandleDeadJob) }()
 	log.Info("consumer started")
 	dispatcherDone := make(chan struct{})
 	go func() {
 		defer close(dispatcherDone)
 		outbox.Run(ctx, db, jobs.Send)
 	}()
-	results.Consume(ctx, image.NewResultHandler(db).Handle)
+	results.Consume(ctx, handler.Handle)
+	<-dlqDone
 	<-dispatcherDone
 	log.Info("consumer exiting")
 }

@@ -215,3 +215,29 @@ go test -short ./...
 
 See [the logging setup](../../observability/README.md) for OpenTelemetry export,
 local Grafana/Loki, queries, and the pipeline smoke check.
+
+### Exhausted jobs and manual retry
+
+The existing consumer reads `SQS_JOBS_DLQ_QUEUE_URL` and persists exhausted
+jobs as failed and retryable before acknowledging them. The web batch view
+shows **Needs attention** and **Retry image**. Fix the worker/infrastructure
+cause first. Invalid image results require corrected inputs in a new batch.
+
+`POST /batches/:id/images/:imageID/retry` requires the owning API key and
+JSON `{"attempt": 0}`, using the image's current `attempt` from batch details.
+The transaction resets the image to pending, clears batch completion,
+increments its attempt and inserts an outbox job using stored inputs.
+Repeated requests for the same attempt enqueue once. Old result and DLQ
+messages cannot overwrite a newer attempt. Messages without an attempt
+remain compatible as attempt zero.
+
+Apply migration `20260921000000_add_image_retry.sql`, deploy the updated worker
+before accepting retries, and restart the API and consumer. The consumer
+requires the jobs DLQ URL and SQS receive/delete permissions.
+
+Recognized jobs leave the DLQ after their failure is persisted. Queue-depth
+alerts measure remaining messages, not all unresolved image failures.
+Malformed or unknown-image messages remain for operator investigation.
+Results DLQ recovery stays separate: fix delivery and redrive results,
+rather than reprocessing images. Completion metrics can record another
+completion after a manual retry; duration is still from original submission.

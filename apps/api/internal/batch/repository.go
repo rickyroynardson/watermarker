@@ -144,7 +144,7 @@ func (r *BatchRepository) GetBatch(ctx context.Context, owner, id uuid.UUID) (Ba
 	}
 	rows, err := r.dbpool.Query(ctx, `
 		SELECT id, source_key, status, COALESCE(output_key, ''),
-			COALESCE(error, ''), updated_at FROM images
+			COALESCE(error, ''), updated_at, attempt, retryable FROM images
 		WHERE batch_id = $1 ORDER BY created_at, id
 	`, id)
 	if err != nil {
@@ -153,8 +153,63 @@ func (r *BatchRepository) GetBatch(ctx context.Context, owner, id uuid.UUID) (Ba
 	defer rows.Close()
 	b.Images, err = pgx.CollectRows(rows, func(row pgx.CollectableRow) (ImageDetails, error) {
 		var image ImageDetails
-		err := row.Scan(&image.ID, &image.SourceKey, &image.Status, &image.OutputKey, &image.Error, &image.UpdatedAt)
+		err := row.Scan(&image.ID, &image.SourceKey, &image.Status, &image.OutputKey, &image.Error, &image.UpdatedAt, &image.Attempt, &image.Retryable)
 		return image, err
 	})
 	return b, err
+}
+
+// RetryImage serializes with results and fences duplicate requests by their observed attempt.
+func (r *BatchRepository) RetryImage(ctx context.Context, owner, batchID, imageID uuid.UUID, attempt int) error {
+	tx, err := r.dbpool.Begin(ctx)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback(ctx)
+	var watermark string
+	err = tx.QueryRow(ctx, "SELECT watermark_key FROM batches WHERE id=$1 AND api_key_id=$2 FOR UPDATE", batchID, owner).Scan(&watermark)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return ErrBatchNotFound
+	}
+	if err != nil {
+		return err
+	}
+	var current int
+	var retryable bool
+	err = tx.QueryRow(ctx, "SELECT attempt, retryable FROM images WHERE id=$1 AND batch_id=$2", imageID, batchID).Scan(&current, &retryable)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return ErrBatchNotFound
+	}
+	if err != nil {
+		return err
+	}
+	// A repeated request succeeds without creating another job.
+	if current == attempt+1 {
+		return tx.Commit(ctx)
+	}
+	if current != attempt || !retryable {
+		return ErrRetryConflict
+	}
+	_, err = tx.Exec(ctx, `
+ UPDATE images SET status='pending', error=NULL, output_key=NULL, retryable=false,
+ attempt=attempt+1, updated_at=clock_timestamp() WHERE id=$1;
+ `, imageID)
+	if err != nil {
+		return err
+	}
+	_, err = tx.Exec(ctx, `
+ INSERT INTO outbox_messages(image_id,payload)
+ SELECT id,jsonb_build_object('version',1,'job_type','composite','batch_id',batch_id,
+ 'image_id',id,'source_key',source_key,'watermark_key',$2::text,'attempt',attempt,'trace_context',$3::jsonb)
+ FROM images WHERE id=$1
+ ON CONFLICT (image_id) DO UPDATE SET payload=EXCLUDED.payload, next_attempt_at=now()
+ `, imageID, watermark, tracing.Carrier(ctx))
+	if err != nil {
+		return err
+	}
+	_, err = tx.Exec(ctx, "UPDATE batches SET completed_at=NULL WHERE id=$1", batchID)
+	if err != nil {
+		return err
+	}
+	return tx.Commit(ctx)
 }

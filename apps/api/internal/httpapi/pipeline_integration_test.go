@@ -49,6 +49,62 @@ func testPipeline(t *testing.T, ctx context.Context, originalDB *pgxpool.Pool, s
 		return count
 	}
 
+	t.Run("exhausted jobs retry atomically and reject stale messages", func(t *testing.T) {
+		b, err := repo.CreateBatch(ctx, newBatch())
+		require.NoError(t, err)
+		defer db.Exec(ctx, "DELETE FROM batches WHERE id=$1", b.ID)
+		var dead string
+		require.NoError(t, db.QueryRow(ctx, "SELECT payload::text FROM outbox_messages WHERE image_id=$1", b.Images[0].ID).Scan(&dead))
+		_, err = db.Exec(ctx, "DELETE FROM outbox_messages WHERE image_id=$1", b.Images[0].ID)
+		require.NoError(t, err)
+		handler := image.NewResultHandler(db)
+		require.Error(t, handler.HandleDeadJob(ctx, "{}"))
+		require.NoError(t, handler.HandleDeadJob(ctx, dead))
+		details, err := repo.GetBatch(ctx, owner, b.ID)
+		require.NoError(t, err)
+		require.True(t, details.Images[0].Retryable)
+		require.NotNil(t, details.CompletedAt)
+		require.ErrorIs(t, repo.RetryImage(ctx, uuid.New(), b.ID, b.Images[0].ID, 0), batch.ErrBatchNotFound)
+		// Failed enqueue must preserve the terminal state.
+		_, err = db.Exec(ctx, "ALTER TABLE outbox_messages ADD CONSTRAINT reject_retry CHECK(false) NOT VALID")
+		require.NoError(t, err)
+		retryErr := repo.RetryImage(ctx, owner, b.ID, b.Images[0].ID, 0)
+		_, err = db.Exec(ctx, "ALTER TABLE outbox_messages DROP CONSTRAINT reject_retry")
+		require.NoError(t, err)
+		require.Error(t, retryErr)
+		details, err = repo.GetBatch(ctx, owner, b.ID)
+		require.NoError(t, err)
+		require.True(t, details.Images[0].Retryable)
+		require.Zero(t, details.Images[0].Attempt)
+		errs := make(chan error, 4)
+		for range 4 {
+			go func() { errs <- repo.RetryImage(ctx, owner, b.ID, b.Images[0].ID, 0) }()
+		}
+		for range 4 {
+			require.NoError(t, <-errs)
+		}
+		require.Equal(t, 1, countJobs())
+		details, err = repo.GetBatch(ctx, owner, b.ID)
+		require.NoError(t, err)
+		require.Equal(t, 1, details.Images[0].Attempt)
+		require.Equal(t, "pending", details.Images[0].Status)
+		require.Nil(t, details.CompletedAt)
+		require.NoError(t, handler.HandleDeadJob(ctx, dead))
+		result := image.Result{Version: 1, JobType: "composite", BatchID: b.ID, ImageID: b.Images[0].ID, Status: "failed", Error: "invalid image"}
+		raw, err := json.Marshal(result)
+		require.NoError(t, err)
+		require.NoError(t, handler.Handle(ctx, string(raw)))
+		details, err = repo.GetBatch(ctx, owner, b.ID)
+		require.NoError(t, err)
+		require.Equal(t, "pending", details.Images[0].Status)
+		result.Attempt = 1
+		raw, err = json.Marshal(result)
+		require.NoError(t, err)
+		require.NoError(t, handler.Handle(ctx, string(raw)))
+		require.ErrorIs(t, repo.RetryImage(ctx, owner, b.ID, b.Images[0].ID, 1), batch.ErrRetryConflict)
+		require.NoError(t, repo.RetryImage(ctx, owner, b.ID, b.Images[0].ID, 0))
+	})
+
 	t.Run("outbox monitor includes delayed retries and preserves age", func(t *testing.T) {
 		count, age, err := outbox.Backlog(ctx, db)
 		require.NoError(t, err)

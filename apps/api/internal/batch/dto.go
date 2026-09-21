@@ -68,6 +68,8 @@ type BatchDetails struct {
 }
 
 type ImageDetails struct {
+	Attempt     int       `json:"attempt"`
+	Retryable   bool      `json:"retryable"`
 	ID          uuid.UUID `json:"id"`
 	SourceKey   string    `json:"source_key"`
 	Status      string    `json:"status"`

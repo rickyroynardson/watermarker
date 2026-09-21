@@ -224,6 +224,25 @@ func TestBatchAPIIntegration(t *testing.T) {
 		counts(t, "unauthorized", 0, 0)
 	})
 
+	t.Run("retry endpoint authorization and validation", func(t *testing.T) {
+		id, imageID := uuid.New(), uuid.New()
+		_, err := db.Exec(ctx, "INSERT INTO batches(id,api_key_id,watermark_key) VALUES($1,$2,'sources/mark')", id, owner)
+		require.NoError(t, err)
+		_, err = db.Exec(ctx, "INSERT INTO images(id,batch_id,source_key,status,error,retryable) VALUES($1,$2,'sources/image','failed','exhausted',true)", imageID, id)
+		require.NoError(t, err)
+		defer db.Exec(ctx, "DELETE FROM batches WHERE id=$1", id)
+		path := "/batches/" + id.String() + "/images/" + imageID.String() + "/retry"
+		checkError(t, request(http.MethodPost, path, "", "", `{"attempt":0}`), 401, utils.CodeUnauthorized)
+		_, other := seedKey()
+		checkError(t, request(http.MethodPost, path, other, "", `{"attempt":0}`), 404, "not_found")
+		for _, body := range []string{`{}`, `{"attempt":-1}`, `{"attempt":null}`, `{"attempt":1.5}`} {
+			checkError(t, request(http.MethodPost, path, token, "", body), 400, utils.CodeInvalidRequest)
+		}
+		require.Equal(t, 202, request(http.MethodPost, path, token, "", `{"attempt":0}`).Code)
+		require.Equal(t, 202, request(http.MethodPost, path, token, "", `{"attempt":0}`).Code)
+		checkError(t, request(http.MethodPost, path, token, "", `{"attempt":1}`), 409, "retry_conflict")
+	})
+
 	t.Run("batch details ownership status and signed downloads", func(t *testing.T) {
 		owner, token := seedKey()
 		id := uuid.New()

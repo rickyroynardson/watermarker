@@ -15,6 +15,7 @@ import (
 )
 
 type Result struct {
+	Attempt   int       `json:"attempt"`
 	Version   int       `json:"version"`
 	JobType   string    `json:"job_type"`
 	BatchID   uuid.UUID `json:"batch_id"`
@@ -25,7 +26,7 @@ type Result struct {
 }
 
 func (r Result) Validate() error {
-	if r.Version != 1 || r.JobType != "composite" || r.BatchID == uuid.Nil || r.ImageID == uuid.Nil {
+	if r.Attempt < 0 || r.Version != 1 || r.JobType != "composite" || r.BatchID == uuid.Nil || r.ImageID == uuid.Nil {
 		return errors.New("invalid result version, job type, or IDs")
 	}
 	switch r.Status {
@@ -63,6 +64,25 @@ func (h *ResultHandler) Handle(ctx context.Context, body string) (err error) {
 	if err := result.Validate(); err != nil {
 		return err
 	}
+	return h.apply(ctx, result, false)
+}
+
+// HandleDeadJob persists exhausted jobs before the queue acknowledges them.
+func (h *ResultHandler) HandleDeadJob(ctx context.Context, body string) error {
+	var result Result
+	if err := json.Unmarshal([]byte(body), &result); err != nil {
+		return err
+	}
+	result.Status = "failed"
+	result.OutputKey = ""
+	result.Error = "Automatic attempts exhausted. Check worker logs and fix the cause before retrying."
+	if err := result.Validate(); err != nil {
+		return err
+	}
+	return h.apply(ctx, result, true)
+}
+
+func (h *ResultHandler) apply(ctx context.Context, result Result, retryable bool) error {
 	tx, err := h.db.Begin(ctx)
 	if err != nil {
 		return err
@@ -76,9 +96,9 @@ func (h *ResultHandler) Handle(ctx context.Context, body string) (err error) {
 	}
 	tag, err := tx.Exec(ctx, `
 		UPDATE images SET status = $3, output_key = NULLIF($4, ''),
-			error = NULLIF($5, ''), updated_at = clock_timestamp()
-		WHERE id = $1 AND batch_id = $2 AND status = 'pending';
-	`, result.ImageID, result.BatchID, result.Status, result.OutputKey, result.Error)
+			error = NULLIF($5, ''), retryable = $7, updated_at = clock_timestamp()
+		WHERE id = $1 AND batch_id = $2 AND status = 'pending' AND attempt = $6;
+	`, result.ImageID, result.BatchID, result.Status, result.OutputKey, result.Error, result.Attempt, retryable)
 	if err != nil {
 		return err
 	}

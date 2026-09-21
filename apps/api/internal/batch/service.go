@@ -16,6 +16,7 @@ var (
 	ErrIdempotencyConflict = errors.New("idempotency key reused with different request")
 	ErrInvalidUploadKey    = errors.New("invalid upload key")
 	ErrUploadNotFound      = errors.New("upload not found")
+	ErrRetryConflict       = errors.New("image is not eligible for this retry")
 	ErrBatchNotFound       = errors.New("batch not found")
 )
 
@@ -25,6 +26,7 @@ const (
 )
 
 type batchRepository interface {
+	RetryImage(context.Context, uuid.UUID, uuid.UUID, uuid.UUID, int) error
 	GetBatch(context.Context, uuid.UUID, uuid.UUID) (BatchDetails, error)
 	ListBatches(ctx context.Context, apiKeyID uuid.UUID, before, beforeID any, limit int) ([]ListBatchItem, error)
 	CreateBatch(ctx context.Context, b Batch) (Batch, error)

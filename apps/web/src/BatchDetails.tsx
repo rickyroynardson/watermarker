@@ -6,6 +6,8 @@ export default function BatchDetails({ id, apiKey }: { id: string; apiKey: strin
   const [batch, setBatch] = useState<Details>();
   const [error, setError] = useState("");
   const [refresh, setRefresh] = useState(0);
+  const [retrying, setRetrying] = useState<string[]>([]);
+  const [retryError, setRetryError] = useState("");
   const [loading, setLoading] = useState(true);
   const [previewErrors, setPreviewErrors] = useState<string[]>([]);
 
@@ -39,6 +41,22 @@ export default function BatchDetails({ id, apiKey }: { id: string; apiKey: strin
     };
   }, [id, apiKey, refresh]);
 
+  async function retry(image: Details["images"][number]) {
+    setRetrying((ids) => [...ids, image.id]);
+    setRetryError("");
+    try {
+      await request(`/batches/${id}/images/${image.id}/retry`, apiKey, {
+        method: "POST",
+        body: JSON.stringify({ attempt: image.attempt }),
+      });
+      setRefresh((value) => value + 1);
+    } catch (cause) {
+      setRetryError(cause instanceof Error ? cause.message : "Could not retry image.");
+    } finally {
+      setRetrying((ids) => ids.filter((value) => value !== image.id));
+    }
+  }
+
   const done = batch?.images.filter((image) => image.status === "done").length || 0;
   const failed = batch?.images.filter((image) => image.status === "failed").length || 0;
   return (
@@ -56,6 +74,11 @@ export default function BatchDetails({ id, apiKey }: { id: string; apiKey: strin
       {error && (
         <p role="alert" className="mt-3 text-sm text-red-700">
           {error} Use Refresh to retry.
+        </p>
+      )}
+      {retryError && (
+        <p role="alert" className="mt-3 text-sm text-red-700">
+          {retryError}
         </p>
       )}
       <div aria-live="polite" className="my-4 text-sm">
@@ -98,10 +121,26 @@ export default function BatchDetails({ id, apiKey }: { id: string; apiKey: strin
                 ? "Queued / processing"
                 : image.status === "done"
                   ? "Completed"
-                  : "Failed"}
+                  : image.retryable
+                    ? "Needs attention"
+                    : "Failed"}
             </p>
             <p className="mt-1 break-all font-mono text-xs text-slate-500">{image.id}</p>
             {image.error && <p className="mt-3 break-words text-sm text-red-700">{image.error}</p>}
+            {image.status === "failed" &&
+              (image.retryable ? (
+                <button
+                  className="mt-3"
+                  disabled={loading || retrying.includes(image.id)}
+                  onClick={() => void retry(image)}
+                >
+                  {retrying.includes(image.id) ? "Retrying…" : "Retry image"}
+                </button>
+              ) : (
+                <p className="mt-3 text-sm text-slate-600">
+                  Upload a corrected image or watermark in a new batch.
+                </p>
+              ))}
             {image.preview_url && (
               <>
                 {previewErrors.includes(image.id) && (

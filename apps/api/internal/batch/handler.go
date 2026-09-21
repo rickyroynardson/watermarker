@@ -102,3 +102,27 @@ func (h *BatchHandler) GetBatch(c *gin.Context) {
 		utils.RespondSuccess(c, http.StatusOK, res)
 	}
 }
+
+func (h *BatchHandler) RetryImage(c *gin.Context) {
+	batchID, err := uuid.Parse(c.Param("id"))
+	imageID, imageErr := uuid.Parse(c.Param("imageID"))
+	var req struct {
+		Attempt *int `json:"attempt"`
+	}
+	if err != nil || imageErr != nil || c.ShouldBindJSON(&req) != nil || req.Attempt == nil || *req.Attempt < 0 || *req.Attempt >= 2147483647 {
+		utils.RespondError(c, 400, utils.CodeInvalidRequest, "valid IDs and a nonnegative attempt are required")
+		return
+	}
+	err = h.service.repository.RetryImage(c.Request.Context(), auth.APIKeyID(c), batchID, imageID, *req.Attempt)
+	switch {
+	case errors.Is(err, ErrBatchNotFound):
+		utils.RespondError(c, 404, "not_found", "batch or image not found")
+	case errors.Is(err, ErrRetryConflict):
+		utils.RespondError(c, 409, "retry_conflict", "image is not retryable at this attempt; refresh its state")
+	case err != nil:
+		zap.L().Error("retry image", zap.Error(err))
+		utils.RespondError(c, 500, utils.CodeInternal, "something went wrong")
+	default:
+		utils.RespondSuccess(c, 202, gin.H{"id": imageID})
+	}
+}

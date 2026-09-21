@@ -59,6 +59,19 @@ def make_worker():
 
 
 class WorkerTests(unittest.TestCase):
+    def test_retry_attempt_roundtrip_and_validation(self):
+        data = json.loads(message()["Body"])
+        for attempt in (0, 1, 8):
+            data["attempt"] = attempt
+            job = Job.parse(json.dumps(data))
+            self.assertEqual(job.result().get("attempt", 0), attempt)
+            self.assertEqual(job.result("invalid image").get("attempt", 0), attempt)
+        for attempt in (-1, True, "1", None, 2147483648):
+            data["attempt"] = attempt
+            with self.assertRaises(ValueError):
+                Job.parse(json.dumps(data))
+
+
     def test_composite_preserves_alpha_and_places_watermark(self):
         output = composite(encoded(), encoded((255, 0, 0, 128), (4, 4)))
         with Image.open(BytesIO(output)) as image:

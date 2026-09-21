@@ -27,6 +27,7 @@ class Job:
     image_id: str
     source_key: str
     watermark_key: str
+    attempt: int = 0
 
     @classmethod
     def parse(cls, body: str) -> "Job":
@@ -44,7 +45,10 @@ class Job:
             canonical_uuid(data.get("image_id")),
             data.get("source_key"),
             data.get("watermark_key"),
+            data.get("attempt", 0),
         )
+        if type(job.attempt) is not int or not 0 <= job.attempt <= 2147483647:
+            raise ValueError("invalid attempt")
         if source_owner(job.source_key) != source_owner(job.watermark_key):
             raise ValueError("source and watermark must belong to the same owner")
         if UUID(job.batch_id).int == 0 or UUID(job.image_id).int == 0:
@@ -63,6 +67,8 @@ class Job:
             "image_id": self.image_id,
             "status": "failed" if error else "done",
         }
+        if self.attempt:
+            result["attempt"] = self.attempt
         if error:
             result["error"] = error
         else:

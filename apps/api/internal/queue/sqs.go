@@ -58,7 +58,7 @@ func (q *SQS) Poll(ctx context.Context, handle func(context.Context, string) err
 		return err
 	}
 	for _, message := range messages.Messages {
-		messageCtx, span := tracing.Start(tracing.Extract(ctx, aws.ToString(message.Body)), "process_result", trace.SpanKindConsumer)
+		messageCtx, span := tracing.Start(tracing.Extract(ctx, aws.ToString(message.Body)), "consume_message", trace.SpanKindConsumer)
 		defer func() { tracing.End(span, err) }()
 		handleCtx, cancel := context.WithTimeout(messageCtx, 10*time.Second)
 		err = handle(handleCtx, aws.ToString(message.Body))
@@ -83,7 +83,7 @@ func (q *SQS) Consume(ctx context.Context, handle func(context.Context, string) 
 	defer ticker.Stop()
 	for ctx.Err() == nil {
 		if err := q.Poll(ctx, handle); err != nil && ctx.Err() == nil {
-			zap.L().Error("consume result", zap.Error(err))
+			zap.L().Error("consume message", zap.String("queue", q.queueURL), zap.Error(err))
 			select {
 			case <-ctx.Done():
 				return

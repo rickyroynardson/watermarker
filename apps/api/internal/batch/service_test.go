@@ -18,6 +18,10 @@ type failingRepo struct {
 	lookupErr, createErr error
 }
 
+func (r *failingRepo) RetryImage(context.Context, uuid.UUID, uuid.UUID, uuid.UUID, int) error {
+	panic("not used")
+}
+
 func (r *failingRepo) ListBatches(context.Context, uuid.UUID, any, any, int) ([]ListBatchItem, error) {
 	panic("not used by these tests")
 }
