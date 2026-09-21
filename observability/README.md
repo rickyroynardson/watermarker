@@ -69,7 +69,7 @@ Recovery logs omit panic values because they can contain request data.
   unauthenticated Loki/OTLP, and stores data on local Docker volumes. For remote
   deployment, configure TLS/authentication, storage capacity, and backups or point
   the collector at a managed backend. Do not expose this Compose stack publicly.
-- Queue/outbox monitoring uses the separate monitor process described below. Alerts are not configured.
+- Queue/outbox monitoring uses the separate monitor process described below. Alert rules are provisioned as described below.
 
 ## Checks
 
@@ -248,7 +248,7 @@ Run one monitor per environment; this dashboard assumes a single environment.
 Repeat the outage exercises: stop the worker to see jobs accumulate; stop the
 consumer after dispatch to see results accumulate. New batches submitted while
 the consumer is stopped remain in the outbox and its oldest age increases.
-Keep the monitor running throughout. No alert notifications are configured.
+Keep the monitor running throughout. Alert rules are provisioned; external notifications are not configured.
 
 Queue depths are snapshots, not counts of jobs processed. A job that arrives and
 finishes between 15-second polls can leave the backlog graph at zero throughout.
@@ -261,3 +261,48 @@ The top processing-activity line graph uses cumulative successful consumer opera
 per instance. It captures fast jobs even when queue snapshots remain zero. The
 first exported value may already be nonzero; subsequent operations create steps.
 Consumer export still defaults to 60 seconds, independently of the monitor.
+
+## Provisioned alerts
+
+Open [Grafana alert rules](http://localhost:3000/alerting/list), folder **Watermarker**,
+group **Watermarker backlog**. Rules live in
+`grafana/provisioning/alerting/backlog.json` (Grafana accepts JSON and YAML).
+They evaluate every 20 seconds and link back to the queue dashboard.
+
+| Rule | Condition | Must remain true for |
+| --- | --- | --- |
+| Messages in dead-letter queue | Any DLQ has more than 0 messages | 2 minutes |
+| Persistent queue backlog | Jobs or results queue has more than 0 messages, including in-flight/delayed | 5 minutes |
+| Outbox dispatch delayed | Oldest pending intent is older than 120 seconds | 2 minutes |
+| Backlog monitoring unhealthy | Any of jobs, results, both DLQs, or outbox lacks a successful reading less than 90 seconds old | 2 minutes |
+
+These are development thresholds, scoped to `deployment.environment.name=development`
+and `service.name=watermarker-monitor`. Continuous healthy traffic can keep a queue
+nonempty and trigger the backlog rule; tune it for your workload before production.
+The outbox condition normally fires after roughly four minutes of waiting, plus
+poll/export/evaluation delays. Monitoring staleness also has its 90-second grace
+period before the two-minute pending period. Recovery occurs on a healthy evaluation.
+
+Edit each rule's `for` and `data` → B → `model.conditions[0].evaluator.params[0]`
+to change its pending duration and threshold. The 90-second freshness cutoff is in
+query A. Backlog rules ignore absent/unhealthy measurements rather than inventing
+zeros; the monitoring rule separately detects failed reads and partial/total data
+loss. Prometheus query failures enter Grafana's Error state.
+
+Grafana currently has no external contact points. Rules evaluate and show their
+state in the UI; they do not send email, Slack, or other messages. Notification
+routing is left unchanged.
+
+After editing the provisioned rules, restart Grafana (dashboards alone reload
+without a restart):
+
+```sh
+docker compose -p watermarker-observability -f observability/docker-compose.yml restart grafana
+python3 observability/test_alerts.py
+```
+
+The test uses the provisioned PromQL and thresholds with synthetic samples in a
+disposable Prometheus container. It verifies pending/firing timing, absent sources,
+failed/stale observations, and recovery without stopping application services.
+For a live exercise, stop the worker before submitting a batch, leave jobs queued
+for five minutes plus export delay, then restart it and watch the alert resolve.

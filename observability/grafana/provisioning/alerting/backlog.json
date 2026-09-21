@@ -1,0 +1,309 @@
+{
+  "apiVersion": 1,
+  "groups": [
+    {
+      "orgId": 1,
+      "name": "Watermarker backlog",
+      "folder": "Watermarker",
+      "interval": "20s",
+      "rules": [
+        {
+          "uid": "watermarker-dlq",
+          "title": "Messages in dead-letter queue",
+          "condition": "B",
+          "data": [
+            {
+              "refId": "A",
+              "relativeTimeRange": {
+                "from": 600,
+                "to": 0
+              },
+              "datasourceUid": "prometheus",
+              "model": {
+                "refId": "A",
+                "expr": "sum by (source) (max by (source, state) ((watermarker_queue_depth{service_name=\"watermarker-monitor\",deployment_environment_name=\"development\",source=~\"jobs_dlq|results_dlq\"}) and on (instance, source, deployment_environment_name) ((watermarker_backlog_observation_success{service_name=\"watermarker-monitor\",deployment_environment_name=\"development\"} == 1) and on (instance, source, deployment_environment_name) (time() - watermarker_backlog_observation_time_seconds{service_name=\"watermarker-monitor\",deployment_environment_name=\"development\"} < 90))))",
+                "instant": true,
+                "range": false,
+                "intervalMs": 15000,
+                "maxDataPoints": 43200
+              }
+            },
+            {
+              "refId": "B",
+              "relativeTimeRange": {
+                "from": 0,
+                "to": 0
+              },
+              "datasourceUid": "__expr__",
+              "model": {
+                "refId": "B",
+                "type": "threshold",
+                "expression": "A",
+                "conditions": [
+                  {
+                    "type": "query",
+                    "evaluator": {
+                      "type": "gt",
+                      "params": [
+                        0
+                      ]
+                    },
+                    "operator": {
+                      "type": "and"
+                    },
+                    "reducer": {
+                      "type": "last",
+                      "params": []
+                    },
+                    "query": {
+                      "params": [
+                        "B"
+                      ]
+                    }
+                  }
+                ]
+              }
+            }
+          ],
+          "noDataState": "OK",
+          "execErrState": "Error",
+          "for": "2m",
+          "annotations": {
+            "summary": "Messages remain in a dead-letter queue.",
+            "description": "Inspect failed-job logs/traces, fix the cause, then redrive deliberately. Do not purge messages to silence this alert.",
+            "__dashboardUid__": "watermarker-queues",
+            "__panelId__": "3"
+          },
+          "labels": {
+            "project": "watermarker",
+            "environment": "development",
+            "severity": "warning"
+          },
+          "isPaused": false
+        },
+        {
+          "uid": "watermarker-backlog",
+          "title": "Persistent queue backlog",
+          "condition": "B",
+          "data": [
+            {
+              "refId": "A",
+              "relativeTimeRange": {
+                "from": 600,
+                "to": 0
+              },
+              "datasourceUid": "prometheus",
+              "model": {
+                "refId": "A",
+                "expr": "sum by (source) (max by (source, state) ((watermarker_queue_depth{service_name=\"watermarker-monitor\",deployment_environment_name=\"development\",source=~\"jobs|results\"}) and on (instance, source, deployment_environment_name) ((watermarker_backlog_observation_success{service_name=\"watermarker-monitor\",deployment_environment_name=\"development\"} == 1) and on (instance, source, deployment_environment_name) (time() - watermarker_backlog_observation_time_seconds{service_name=\"watermarker-monitor\",deployment_environment_name=\"development\"} < 90))))",
+                "instant": true,
+                "range": false,
+                "intervalMs": 15000,
+                "maxDataPoints": 43200
+              }
+            },
+            {
+              "refId": "B",
+              "relativeTimeRange": {
+                "from": 0,
+                "to": 0
+              },
+              "datasourceUid": "__expr__",
+              "model": {
+                "refId": "B",
+                "type": "threshold",
+                "expression": "A",
+                "conditions": [
+                  {
+                    "type": "query",
+                    "evaluator": {
+                      "type": "gt",
+                      "params": [
+                        0
+                      ]
+                    },
+                    "operator": {
+                      "type": "and"
+                    },
+                    "reducer": {
+                      "type": "last",
+                      "params": []
+                    },
+                    "query": {
+                      "params": [
+                        "B"
+                      ]
+                    }
+                  }
+                ]
+              }
+            }
+          ],
+          "noDataState": "OK",
+          "execErrState": "Error",
+          "for": "5m",
+          "annotations": {
+            "summary": "A jobs/results queue has remained nonempty for five minutes.",
+            "description": "Check the worker for jobs backlog or the result consumer for results backlog. Includes in-flight/delayed messages; continuous healthy traffic can also trigger this development threshold.",
+            "__dashboardUid__": "watermarker-queues",
+            "__panelId__": "1"
+          },
+          "labels": {
+            "project": "watermarker",
+            "environment": "development",
+            "severity": "warning"
+          },
+          "isPaused": false
+        },
+        {
+          "uid": "watermarker-outbox",
+          "title": "Outbox dispatch delayed",
+          "condition": "B",
+          "data": [
+            {
+              "refId": "A",
+              "relativeTimeRange": {
+                "from": 600,
+                "to": 0
+              },
+              "datasourceUid": "prometheus",
+              "model": {
+                "refId": "A",
+                "expr": "max ((watermarker_outbox_oldest_age_seconds{service_name=\"watermarker-monitor\",deployment_environment_name=\"development\"}) and on (instance, source, deployment_environment_name) ((watermarker_backlog_observation_success{service_name=\"watermarker-monitor\",deployment_environment_name=\"development\"} == 1) and on (instance, source, deployment_environment_name) (time() - watermarker_backlog_observation_time_seconds{service_name=\"watermarker-monitor\",deployment_environment_name=\"development\"} < 90)))",
+                "instant": true,
+                "range": false,
+                "intervalMs": 15000,
+                "maxDataPoints": 43200
+              }
+            },
+            {
+              "refId": "B",
+              "relativeTimeRange": {
+                "from": 0,
+                "to": 0
+              },
+              "datasourceUid": "__expr__",
+              "model": {
+                "refId": "B",
+                "type": "threshold",
+                "expression": "A",
+                "conditions": [
+                  {
+                    "type": "query",
+                    "evaluator": {
+                      "type": "gt",
+                      "params": [
+                        120
+                      ]
+                    },
+                    "operator": {
+                      "type": "and"
+                    },
+                    "reducer": {
+                      "type": "last",
+                      "params": []
+                    },
+                    "query": {
+                      "params": [
+                        "B"
+                      ]
+                    }
+                  }
+                ]
+              }
+            }
+          ],
+          "noDataState": "OK",
+          "execErrState": "Error",
+          "for": "2m",
+          "annotations": {
+            "summary": "The oldest unsent outbox job is over two minutes old.",
+            "description": "Check the Go consumer/outbox dispatcher and SQS connectivity. Retry delays do not reset this age.",
+            "__dashboardUid__": "watermarker-queues",
+            "__panelId__": "5"
+          },
+          "labels": {
+            "project": "watermarker",
+            "environment": "development",
+            "severity": "warning"
+          },
+          "isPaused": false
+        },
+        {
+          "uid": "watermarker-monitor",
+          "title": "Backlog monitoring unhealthy",
+          "condition": "B",
+          "data": [
+            {
+              "refId": "A",
+              "relativeTimeRange": {
+                "from": 600,
+                "to": 0
+              },
+              "datasourceUid": "prometheus",
+              "model": {
+                "refId": "A",
+                "expr": "5 - (count(max by (source) ((watermarker_backlog_observation_success{service_name=\"watermarker-monitor\",deployment_environment_name=\"development\",source=~\"jobs|results|jobs_dlq|results_dlq|outbox\"} == 1) and on (instance, source, deployment_environment_name) (time() - watermarker_backlog_observation_time_seconds{service_name=\"watermarker-monitor\",deployment_environment_name=\"development\",source=~\"jobs|results|jobs_dlq|results_dlq|outbox\"} < 90))) or vector(0))",
+                "instant": true,
+                "range": false,
+                "intervalMs": 15000,
+                "maxDataPoints": 43200
+              }
+            },
+            {
+              "refId": "B",
+              "relativeTimeRange": {
+                "from": 0,
+                "to": 0
+              },
+              "datasourceUid": "__expr__",
+              "model": {
+                "refId": "B",
+                "type": "threshold",
+                "expression": "A",
+                "conditions": [
+                  {
+                    "type": "query",
+                    "evaluator": {
+                      "type": "gt",
+                      "params": [
+                        0
+                      ]
+                    },
+                    "operator": {
+                      "type": "and"
+                    },
+                    "reducer": {
+                      "type": "last",
+                      "params": []
+                    },
+                    "query": {
+                      "params": [
+                        "B"
+                      ]
+                    }
+                  }
+                ]
+              }
+            }
+          ],
+          "noDataState": "Alerting",
+          "execErrState": "Error",
+          "for": "2m",
+          "annotations": {
+            "summary": "One or more of the five expected backlog sources has no fresh successful reading.",
+            "description": "Keep cmd/monitor running. Inspect its logs, AWS credentials, SQS/PostgreSQL connectivity, and OTLP export. A reading is stale after 90 seconds; this also detects a completely absent monitor.",
+            "__dashboardUid__": "watermarker-queues",
+            "__panelId__": "7"
+          },
+          "labels": {
+            "project": "watermarker",
+            "environment": "development",
+            "severity": "warning"
+          },
+          "isPaused": false
+        }
+      ]
+    }
+  ]
+}
