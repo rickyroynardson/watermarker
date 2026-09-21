@@ -7,6 +7,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
+	"github.com/rickyroynardson/watermarker/apps/api/internal/tracing"
 )
 
 type BatchRepository struct {
@@ -112,10 +113,11 @@ func (r *BatchRepository) CreateBatch(ctx context.Context, b Batch) (Batch, erro
 		INSERT INTO outbox_messages (image_id, payload)
 		SELECT id, jsonb_build_object(
 			'version', 1, 'job_type', 'composite', 'batch_id', batch_id,
-			'image_id', id, 'source_key', source_key, 'watermark_key', $2::text
+			'image_id', id, 'source_key', source_key, 'watermark_key', $2::text,
+			'trace_context', $3::jsonb
 		)
 		FROM images WHERE batch_id = $1;
-	`, b.ID, b.WatermarkKey)
+	`, b.ID, b.WatermarkKey, tracing.Carrier(ctx))
 	if err != nil {
 		return Batch{}, err
 	}

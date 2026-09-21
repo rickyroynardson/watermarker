@@ -1,6 +1,9 @@
 package httpapi
 
 import (
+	"go.opentelemetry.io/otel"
+	"go.opentelemetry.io/otel/sdk/trace"
+	"go.opentelemetry.io/otel/sdk/trace/tracetest"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -25,7 +28,22 @@ func TestRequestLogOmitsSecrets(t *testing.T) {
 		t.Fatalf("got %d request logs", len(entries))
 	}
 	fields := entries[0].ContextMap()
-	if len(fields) != 4 || fields["http.route"] != "/ping" || fields["http.response.status_code"] != int64(200) {
+	if len(fields) != 5 || fields["http.route"] != "/ping" || fields["http.response.status_code"] != int64(200) {
 		t.Fatalf("unexpected request fields: %v", fields)
+	}
+}
+
+func TestHTTPTraceUsesRemoteParentAndRouteTemplate(t *testing.T) {
+	recorder := tracetest.NewSpanRecorder()
+	provider := trace.NewTracerProvider(trace.WithSpanProcessor(recorder))
+	old := otel.GetTracerProvider()
+	otel.SetTracerProvider(provider)
+	defer otel.SetTracerProvider(old)
+	request := httptest.NewRequest(http.MethodGet, "/ping?token=secret", nil)
+	request.Header.Set("traceparent", "00-0123456789abcdef0123456789abcdef-0123456789abcdef-01")
+	NewRouter(nil, nil).ServeHTTP(httptest.NewRecorder(), request)
+	spans := recorder.Ended()
+	if len(spans) != 1 || spans[0].Name() != "GET /ping" || spans[0].SpanContext().TraceID().String() != "0123456789abcdef0123456789abcdef" || spans[0].Parent().SpanID().String() != "0123456789abcdef" {
+		t.Fatalf("unexpected HTTP trace: %+v", spans)
 	}
 }

@@ -8,18 +8,23 @@ from threading import Event, Thread
 from time import perf_counter
 
 from botocore.exceptions import ClientError
-from opentelemetry import metrics
+from opentelemetry import metrics, trace
+from opentelemetry.context import Context
+from opentelemetry.trace.propagation.tracecontext import TraceContextTextMapPropagator
 
 from .messages import Job
 from .watermark import MAX_BYTES, InvalidImage, composite
 
 log = logging.getLogger(__name__)
+tracer = trace.get_tracer("watermarker")
+propagator = TraceContextTextMapPropagator()
 VISIBILITY_SECONDS = 120
 HEARTBEAT_SECONDS = 40
 
 job_duration = metrics.get_meter("watermarker").create_histogram(
-    "watermarker.job.duration", unit="s",
-    explicit_bucket_boundaries_advisory=(.01, .05, .1, .5, 1, 5, 10, 30, 60, 120),
+    "watermarker.job.duration",
+    unit="s",
+    explicit_bucket_boundaries_advisory=(0.01, 0.05, 0.1, 0.5, 1, 5, 10, 30, 60, 120),
 )
 
 
@@ -55,32 +60,92 @@ class Worker:
             raise
 
     def process(self, message: dict) -> None:
+        # Optional telemetry never changes job validation or retry behavior.
+        try:
+            carrier = json.loads(message["Body"]).get("trace_context", {})
+        except (ValueError, AttributeError):
+            carrier = {}
+        if not isinstance(carrier, dict) or not all(
+            isinstance(v, str) for v in carrier.values()
+        ):
+            carrier = {}
+        with tracer.start_as_current_span(
+            "process_job",
+            context=propagator.extract(carrier, context=Context()),
+            kind=trace.SpanKind.CONSUMER,
+            record_exception=False,
+            set_status_on_exception=False,
+        ) as span:
+            try:
+                self._process(message)
+            except Exception:
+                span.set_status(trace.StatusCode.ERROR, "job attempt failed")
+                log.exception("job attempt failed")
+                raise
+
+    def _process(self, message: dict) -> None:
         start = perf_counter()
         outcome = "error"
         try:
             job = Job.parse(message["Body"])
+            span = trace.get_current_span()
+            span.set_attributes({"image.id": job.image_id, "batch.id": job.batch_id})
             result = job.result()
             if not self.output_exists(job.output_key):
                 try:
-                    output = composite(self.download(job.source_key), self.watermark(job.watermark_key))
+                    with tracer.start_as_current_span(
+                        "watermark",
+                        record_exception=False,
+                        set_status_on_exception=False,
+                    ):
+                        output = composite(
+                            self.download(job.source_key),
+                            self.watermark(job.watermark_key),
+                        )
                 except InvalidImage as exc:
                     result = job.result(str(exc))
+                    span.set_status(trace.StatusCode.ERROR, "invalid image")
                 else:
                     try:
                         self.s3.put_object(
-                            Bucket=self.bucket, Key=job.output_key, Body=output,
-                            ContentType="image/png", IfNoneMatch="*",
+                            Bucket=self.bucket,
+                            Key=job.output_key,
+                            Body=output,
+                            ContentType="image/png",
+                            IfNoneMatch="*",
                         )
                     except ClientError as exc:
                         # Another delivery finished first. Other failures remain retryable.
-                        if exc.response["Error"]["Code"] not in ("PreconditionFailed", "412"):
+                        if exc.response["Error"]["Code"] not in (
+                            "PreconditionFailed",
+                            "412",
+                        ):
                             raise
-            self.sqs.send_message(QueueUrl=self.results_url, MessageBody=json.dumps(result))
-            self.sqs.delete_message(QueueUrl=self.jobs_url, ReceiptHandle=message["ReceiptHandle"])
+            with tracer.start_as_current_span(
+                "publish_result",
+                kind=trace.SpanKind.PRODUCER,
+                record_exception=False,
+                set_status_on_exception=False,
+            ):
+                carrier = {}
+                propagator.inject(carrier)
+                if carrier:
+                    result["trace_context"] = carrier
+                self.sqs.send_message(
+                    QueueUrl=self.results_url, MessageBody=json.dumps(result)
+                )
+            self.sqs.delete_message(
+                QueueUrl=self.jobs_url, ReceiptHandle=message["ReceiptHandle"]
+            )
             outcome = result["status"]
-            log.info("image processed", extra={
-                "image_id": job.image_id, "batch_id": job.batch_id, "status": result["status"],
-            })
+            log.info(
+                "image processed",
+                extra={
+                    "image_id": job.image_id,
+                    "batch_id": job.batch_id,
+                    "status": result["status"],
+                },
+            )
         finally:
             job_duration.record(perf_counter() - start, {"outcome": outcome})
 
@@ -92,11 +157,14 @@ class Worker:
             while not finished.wait(HEARTBEAT_SECONDS):
                 try:
                     self.sqs.change_message_visibility(
-                        QueueUrl=self.jobs_url, ReceiptHandle=receipt,
+                        QueueUrl=self.jobs_url,
+                        ReceiptHandle=receipt,
                         VisibilityTimeout=VISIBILITY_SECONDS,
                     )
                 except Exception:
-                    log.exception("could not extend job visibility; duplicate delivery is possible")
+                    log.exception(
+                        "could not extend job visibility; duplicate delivery is possible"
+                    )
 
         thread = Thread(target=extend, daemon=True)
         thread.start()
@@ -108,8 +176,10 @@ class Worker:
 
     def poll(self) -> None:
         response = self.sqs.receive_message(
-            QueueUrl=self.jobs_url, MaxNumberOfMessages=1,
-            WaitTimeSeconds=20, VisibilityTimeout=VISIBILITY_SECONDS,
+            QueueUrl=self.jobs_url,
+            MaxNumberOfMessages=1,
+            WaitTimeSeconds=20,
+            VisibilityTimeout=VISIBILITY_SECONDS,
         )
         for message in response.get("Messages", []):
             with self.visibility_heartbeat(message["ReceiptHandle"]):

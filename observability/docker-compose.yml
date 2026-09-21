@@ -1,4 +1,44 @@
 services:
+  opensearch:
+    image: opensearchproject/opensearch:3.0.0
+    environment:
+      discovery.type: single-node
+      DISABLE_INSTALL_DEMO_CONFIG: "true"
+      DISABLE_SECURITY_PLUGIN: "true"
+      OPENSEARCH_JAVA_OPTS: -Xms512m -Xmx512m
+    volumes:
+      - opensearch_data:/usr/share/opensearch/data
+    healthcheck:
+      test:
+        - CMD-SHELL
+        - >-
+          curl -fsS 'http://localhost:9200/_cluster/health?wait_for_status=yellow&timeout=5s'
+          | grep -q '"timed_out":false'
+      interval: 10s
+      timeout: 10s
+      retries: 12
+      start_period: 30s
+
+  jaeger:
+    image: jaegertracing/jaeger:latest
+    command: ["--config=/etc/jaeger/config.yaml"]
+    volumes:
+      - ./jaeger-config.yaml:/etc/jaeger/config.yaml:ro
+    depends_on:
+      opensearch:
+        condition: service_healthy
+    ports:
+      - 16686:16686
+
+  tempo:
+    image: grafana/tempo:latest
+    command: ["-config.file=/etc/tempo.yaml"]
+    ports:
+      - 3200:3200
+    volumes:
+      - ./tempo-config.yaml:/etc/tempo.yaml:ro
+      - tempo_data:/var/tempo
+
   prometheus:
     image: prom/prometheus:latest
     command:
@@ -33,6 +73,8 @@ services:
       - ./otel-collector-config.yaml:/etc/otelcol/config.yaml:ro
     depends_on:
       - loki
+      - tempo
+      - jaeger
     
   grafana:
     image: grafana/grafana:latest
@@ -46,8 +88,11 @@ services:
       - grafana_data:/var/lib/grafana
     depends_on:
       - loki
+      - tempo
 
 volumes:
+  opensearch_data:
+  tempo_data:
   prometheus_data:
   loki_data:
   grafana_data:

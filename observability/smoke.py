@@ -2,6 +2,7 @@
 
 import json
 import time
+import urllib.error
 import urllib.parse
 import urllib.request
 import uuid
@@ -61,3 +62,48 @@ for _ in range(30):
     time.sleep(1)
 else:
     raise SystemExit("FAIL: metric not found in Prometheus within 30 seconds")
+
+# A known trace ID lets us verify ingestion without waiting for search indexing.
+trace_id, span_id = uuid.uuid4().hex, uuid.uuid4().hex[:16]
+now = time.time_ns()
+payload = {"resourceSpans": [{
+    "resource": {"attributes": [
+        {"key": "service.name", "value": {"stringValue": "watermarker-smoke"}},
+    ]},
+    "scopeSpans": [{"scope": {"name": "smoke"}, "spans": [{
+        "traceId": trace_id, "spanId": span_id, "name": "smoke", "kind": 1,
+        "startTimeUnixNano": str(now - 1000000), "endTimeUnixNano": str(now),
+    }]}],
+}]}
+request = urllib.request.Request("http://localhost:4318/v1/traces",
+    data=json.dumps(payload).encode(), headers={"Content-Type": "application/json"})
+with urllib.request.urlopen(request, timeout=5) as response:
+    result = json.load(response)
+    assert not result.get("partialSuccess", {}).get("rejectedSpans"), result
+for _ in range(30):
+    try:
+        with urllib.request.urlopen("http://localhost:3200/api/traces/" + trace_id, timeout=5) as response:
+            result = json.load(response)
+        assert any(scope.get("spans") for batch in result.get("batches", []) for scope in batch.get("scopeSpans", [])), result
+        print(f"PASS: Collector -> Tempo; trace {trace_id} in Grafana Explore")
+        break
+    except urllib.error.HTTPError as exc:
+        if exc.code != 404:
+            raise
+    time.sleep(1)
+else:
+    raise SystemExit("FAIL: trace not found in Tempo within 30 seconds")
+
+for _ in range(30):
+    try:
+        with urllib.request.urlopen("http://localhost:16686/api/traces/" + trace_id, timeout=5) as response:
+            result = json.load(response)
+        if any(trace.get("traceID") == trace_id and trace.get("spans") for trace in result.get("data", [])):
+            print(f"PASS: same trace in Jaeger at http://localhost:16686/trace/{trace_id}")
+            break
+    except urllib.error.HTTPError as exc:
+        if exc.code != 404:
+            raise
+    time.sleep(1)
+else:
+    raise SystemExit("FAIL: trace not found in Jaeger within 30 seconds")

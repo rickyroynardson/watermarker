@@ -14,6 +14,10 @@ processors:
     send_batch_size: 512
 
 exporters:
+  otlphttp/jaeger:
+    endpoint: http://jaeger:4318
+  otlphttp/tempo:
+    endpoint: http://tempo:4318
   otlphttp/prometheus:
     endpoint: http://prometheus:9090/api/v1/otlp
   otlphttp/loki:
@@ -26,6 +30,10 @@ exporters:
 
 service:
   pipelines:
+    traces:
+      receivers: [otlp]
+      processors: [memory_limiter, batch]
+      exporters: [otlphttp/tempo, otlphttp/jaeger]
     metrics:
       receivers: [otlp]
       processors: [memory_limiter, batch]

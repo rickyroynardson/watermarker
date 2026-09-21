@@ -14,6 +14,7 @@ import (
 	"github.com/rickyroynardson/watermarker/apps/api/internal/logger"
 	"github.com/rickyroynardson/watermarker/apps/api/internal/metrics"
 	"github.com/rickyroynardson/watermarker/apps/api/internal/storage"
+	"github.com/rickyroynardson/watermarker/apps/api/internal/tracing"
 	"go.uber.org/zap"
 )
 
@@ -25,6 +26,8 @@ func main() {
 	zap.ReplaceGlobals(logger)
 	shutdownMetrics := metrics.New("watermarker-api")
 	defer shutdownMetrics()
+	shutdownTraces := tracing.New("watermarker-api")
+	defer shutdownTraces()
 
 	if envErr != nil {
 		logger.Warn("no .env file loaded", zap.Error(envErr))

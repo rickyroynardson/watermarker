@@ -1,4 +1,4 @@
-# Logs and metrics
+# Logs, metrics, and traces
 
 Go Zap / Python logging → OTLP over HTTP → OpenTelemetry Collector → Loki → Grafana.
 Loki's [native OTLP ingestion](https://grafana.com/docs/loki/latest/send-data/otel/)
@@ -26,7 +26,7 @@ keeps messages, severity, and structured attributes. No application-specific Lok
    appear for all three processes. Allow a few seconds for batching and refresh.
 
 Run `python3 observability/smoke.py` to independently send a test log through the
-collector and verify that Loki returns it, then verify a metric in Prometheus. It requires the observability stack,
+collector and verify that Loki returns it, then verify a metric in Prometheus and the same trace in Tempo and Jaeger. It requires the observability stack,
 but no application, database, AWS credentials, or third-party Python packages.
 
 Stop with `make observability-down`; Docker volumes retain logs and Grafana state.
@@ -69,7 +69,7 @@ Recovery logs omit panic values because they can contain request data.
   unauthenticated Loki/OTLP, and stores data on local Docker volumes. For remote
   deployment, configure TLS/authentication, storage capacity, and backups or point
   the collector at a managed backend. Do not expose this Compose stack publicly.
-- Traces, distributed trace propagation, queue backlog metrics, and alerts are not configured.
+- Queue backlog metrics and alerts are not configured.
 
 ## Checks
 
@@ -142,3 +142,75 @@ Latency percentiles require observations between exports inside the recent rate
 window. Idle panels show no observations rather than NaN or a fabricated zero.
 The worker/batch totals show cumulative observations from active process instances
 and reset on restart; exact batch duration remains available in the application.
+
+## Distributed tracing
+
+Run `make observability-up` and restart all three processes with the existing
+`OTEL_EXPORTER_OTLP_ENDPOINT=http://localhost:4318`. No database migration is needed.
+In Grafana Explore select **Tempo**, search for service `watermarker-api`, and
+open a `POST /batches` trace. Traces retain seven days in a local Docker volume.
+The Tempo configuration targets 3.x (verified with 3.0.0): retention is set under
+`overrides.defaults.compaction.block_retention`; the old top-level `compactor`
+section is no longer supported.
+
+The span chain is HTTP request → `publish_job` (Go consumer) → `process_job`
+(Python worker, with `watermark` and `publish_result` children) → `process_result`
+(Go consumer, covering the database commit and acknowledgment).
+W3C `traceparent`/`tracestate` travel in optional JSON `trace_context` fields,
+persisted atomically in the outbox. Delayed dispatch and retries retain the
+original trace; each delivery creates a new span. Old jobs without context start
+new traces. Invalid optional context is ignored. No baggage is propagated.
+Worker spans include image and batch IDs; headers, message bodies, and raw error
+text are not recorded on spans. HTTP and worker logs carry active OTLP trace IDs.
+Browser uploads via presigned S3 URLs and subsequent polling are separate requests;
+individual SQL/S3 calls and heartbeat threads do not have their own spans.
+
+Export is batched and optional; without an endpoint the tracing SDK is not enabled.
+`OTEL_EXPORTER_OTLP_TRACES_ENDPOINT` can instead specify the full `/v1/traces` URL.
+Both SDKs accept `OTEL_TRACES_SAMPLER=parentbased_traceidratio` and
+`OTEL_TRACES_SAMPLER_ARG=0.1` to sample 10% of root traces (default: all).
+Normal shutdown flushes pending spans; crashes and exporter outages can lose them.
+The local Tempo service is unauthenticated and intended for development.
+
+References: [OpenTelemetry propagation](https://pkg.go.dev/go.opentelemetry.io/otel/propagation)
+and [Tempo Collector setup](https://grafana.com/docs/tempo/latest/set-up-for-tracing/instrument-send/set-up-collector/otel-collector/).
+
+### Jaeger trace view
+
+The same Collector trace pipeline exports to both Tempo and Jaeger. Application
+OTLP endpoints and instrumentation stay unchanged; newly received traces have the
+same trace IDs in both backends. Existing Tempo history is not copied to Jaeger.
+
+Run `make observability-up`, then reload the Collector configuration:
+
+```sh
+docker compose -p watermarker-observability -f observability/docker-compose.yml restart otel-collector
+```
+
+Open [Jaeger](http://localhost:16686), select `watermarker-api`, and click
+**Find Traces**, or paste a trace ID from Tempo. Generate a new batch to inspect
+the complete job flow. Jaeger's OTLP port stays inside the Compose network, so it
+does not conflict with the Collector's host port 4318.
+
+Jaeger writes and queries traces through [OpenSearch](https://www.jaegertracing.io/docs/2.21/storage/opensearch/),
+configured in `jaeger-config.yaml`. The `opensearch_data` Docker volume survives
+container restarts and `make observability-down`; `make observability-nuke`
+deletes it. Previously in-memory Jaeger history is not migrated.
+
+OpenSearch runs as one node with a 512 MiB JVM heap (total memory use is higher),
+one shard per index, and no replicas. Jaeger waits for its health check before
+starting. OpenSearch has no published host ports; security is disabled for this
+local development stack. Enable authentication/TLS for a remote deployment.
+Unlike Tempo's seven-day retention, OpenSearch indices currently have no automatic
+expiry; configure an OpenSearch ISM retention policy when you need bounded history.
+
+After changing the Jaeger config, run:
+
+```sh
+docker compose -p watermarker-observability -f observability/docker-compose.yml up -d opensearch jaeger
+docker compose -p watermarker-observability -f observability/docker-compose.yml restart jaeger
+python3 observability/smoke.py
+```
+
+To verify persistence, copy the smoke trace's Jaeger URL, restart OpenSearch and
+Jaeger, and open that same URL again. Traces already indexed remain available.

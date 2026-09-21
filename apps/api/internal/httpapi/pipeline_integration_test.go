@@ -17,7 +17,10 @@ import (
 	"github.com/rickyroynardson/watermarker/apps/api/internal/image"
 	"github.com/rickyroynardson/watermarker/apps/api/internal/outbox"
 	"github.com/rickyroynardson/watermarker/apps/api/internal/queue"
+	"github.com/rickyroynardson/watermarker/apps/api/internal/tracing"
 	"github.com/stretchr/testify/require"
+	"go.opentelemetry.io/otel/propagation"
+	"go.opentelemetry.io/otel/trace"
 )
 
 func testPipeline(t *testing.T, ctx context.Context, originalDB *pgxpool.Pool, sqsClient *sqs.Client, owner uuid.UUID) {
@@ -45,6 +48,21 @@ func testPipeline(t *testing.T, ctx context.Context, originalDB *pgxpool.Pool, s
 		require.NoError(t, db.QueryRow(ctx, "SELECT count(*) FROM outbox_messages").Scan(&count))
 		return count
 	}
+
+	t.Run("outbox preserves request trace context", func(t *testing.T) {
+		parent := tracing.Propagator.Extract(ctx, propagation.MapCarrier{
+			"traceparent": "00-0123456789abcdef0123456789abcdef-0123456789abcdef-01",
+		})
+		b := newBatch()
+		_, err := repo.CreateBatch(parent, b)
+		require.NoError(t, err)
+		var body string
+		require.NoError(t, db.QueryRow(ctx, "SELECT payload::text FROM outbox_messages WHERE image_id = $1", b.Images[0].ID).Scan(&body))
+		restored := trace.SpanContextFromContext(tracing.Extract(ctx, body))
+		require.Equal(t, trace.SpanContextFromContext(parent), restored)
+		_, err = db.Exec(ctx, "DELETE FROM outbox_messages WHERE image_id = $1", b.Images[0].ID)
+		require.NoError(t, err)
+	})
 
 	t.Run("batch completion survives concurrent final results and duplicates", func(t *testing.T) {
 		b := newBatch()

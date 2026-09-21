@@ -12,6 +12,7 @@ import (
 	"github.com/aws/aws-sdk-go-v2/credentials"
 	"github.com/aws/aws-sdk-go-v2/service/sqs"
 	"github.com/stretchr/testify/require"
+	"go.opentelemetry.io/otel/trace"
 )
 
 func TestPollAcknowledgesOnlySuccessfulHandling(t *testing.T) {
@@ -22,7 +23,7 @@ func TestPollAcknowledgesOnlySuccessfulHandling(t *testing.T) {
 				w.Header().Set("Content-Type", "application/x-amz-json-1.0")
 				switch r.Header.Get("X-Amz-Target") {
 				case "AmazonSQS.ReceiveMessage":
-					_, _ = w.Write([]byte(`{"Messages":[{"MessageId":"id","ReceiptHandle":"receipt","Body":"result"}]}`))
+					_, _ = w.Write([]byte(`{"Messages":[{"MessageId":"id","ReceiptHandle":"receipt","Body":"{\"trace_context\":{\"traceparent\":\"00-0123456789abcdef0123456789abcdef-0123456789abcdef-01\"}}"}]}`))
 				case "AmazonSQS.DeleteMessage":
 					if !handled.Load() {
 						t.Error("acknowledgement happened before successful handling")
@@ -44,8 +45,8 @@ func TestPollAcknowledgesOnlySuccessfulHandling(t *testing.T) {
 				Region: "us-east-1", Credentials: credentials.NewStaticCredentialsProvider("test", "test", ""),
 			}, func(o *sqs.Options) { o.BaseEndpoint = aws.String(server.URL); o.RetryMaxAttempts = 1 })}
 			failure := errors.New("database unavailable")
-			err := q.Poll(t.Context(), func(_ context.Context, body string) error {
-				require.Equal(t, "result", body)
+			err := q.Poll(t.Context(), func(ctx context.Context, body string) error {
+				require.Equal(t, "0123456789abcdef0123456789abcdef", trace.SpanContextFromContext(ctx).TraceID().String())
 				if stage == "handler failure" {
 					return failure
 				}

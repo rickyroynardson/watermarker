@@ -5,15 +5,18 @@ import os
 from contextlib import contextmanager
 from uuid import uuid4
 
-from opentelemetry import metrics
+from opentelemetry import metrics, trace
 from opentelemetry.exporter.otlp.proto.http._log_exporter import OTLPLogExporter
 from opentelemetry.exporter.otlp.proto.http.metric_exporter import OTLPMetricExporter
+from opentelemetry.exporter.otlp.proto.http.trace_exporter import OTLPSpanExporter
 from opentelemetry.instrumentation.logging.handler import LoggingHandler
 from opentelemetry.sdk._logs import LoggerProvider
 from opentelemetry.sdk._logs.export import BatchLogRecordProcessor
 from opentelemetry.sdk.metrics import MeterProvider
 from opentelemetry.sdk.metrics.export import PeriodicExportingMetricReader
 from opentelemetry.sdk.resources import Resource
+from opentelemetry.sdk.trace import TracerProvider
+from opentelemetry.sdk.trace.export import BatchSpanProcessor
 
 
 @contextmanager
@@ -80,3 +83,19 @@ def configure_metrics():
     finally:
         if provider is not None:
             provider.shutdown(timeout_millis=5000)
+
+
+@contextmanager
+def configure_tracing():
+    provider = None
+    if os.getenv("OTEL_EXPORTER_OTLP_ENDPOINT") or os.getenv("OTEL_EXPORTER_OTLP_TRACES_ENDPOINT"):
+        provider = TracerProvider(resource=Resource.create({
+            "service.name": os.getenv("OTEL_SERVICE_NAME") or "watermarker-worker",
+        }))
+        provider.add_span_processor(BatchSpanProcessor(OTLPSpanExporter(timeout=5)))
+        trace.set_tracer_provider(provider)
+    try:
+        yield
+    finally:
+        if provider is not None:
+            provider.shutdown()

@@ -4,6 +4,8 @@ import (
 	"context"
 	"errors"
 	"github.com/rickyroynardson/watermarker/apps/api/internal/metrics"
+	"github.com/rickyroynardson/watermarker/apps/api/internal/tracing"
+	"go.opentelemetry.io/otel/trace"
 	"time"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
@@ -29,6 +31,12 @@ func NewSQS(ctx context.Context, queueURL string) (*SQS, error) {
 }
 
 func (q *SQS) Send(ctx context.Context, body string) (err error) {
+	ctx, span := tracing.Start(tracing.Extract(ctx, body), "publish_job", trace.SpanKindProducer)
+	defer func() { tracing.End(span, err) }()
+	body, err = tracing.Inject(ctx, body)
+	if err != nil {
+		return err
+	}
 	start := time.Now()
 	defer func() { metrics.Message(ctx, "publish_job", start, err) }()
 	_, err = q.client.SendMessage(ctx, &sqs.SendMessageInput{
@@ -38,7 +46,7 @@ func (q *SQS) Send(ctx context.Context, body string) (err error) {
 }
 
 // Poll acknowledges a message only after its handler commits successfully.
-func (q *SQS) Poll(ctx context.Context, handle func(context.Context, string) error) error {
+func (q *SQS) Poll(ctx context.Context, handle func(context.Context, string) error) (err error) {
 	messages, err := q.client.ReceiveMessage(ctx, &sqs.ReceiveMessageInput{
 		QueueUrl: aws.String(q.queueURL), MaxNumberOfMessages: 1,
 		WaitTimeSeconds: 20, VisibilityTimeout: 60,
@@ -47,8 +55,10 @@ func (q *SQS) Poll(ctx context.Context, handle func(context.Context, string) err
 		return err
 	}
 	for _, message := range messages.Messages {
-		handleCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
-		err := handle(handleCtx, aws.ToString(message.Body))
+		messageCtx, span := tracing.Start(tracing.Extract(ctx, aws.ToString(message.Body)), "process_result", trace.SpanKindConsumer)
+		defer func() { tracing.End(span, err) }()
+		handleCtx, cancel := context.WithTimeout(messageCtx, 10*time.Second)
+		err = handle(handleCtx, aws.ToString(message.Body))
 		cancel()
 		if err != nil {
 			return err // Leave failures for retry and eventual DLQ redrive.

@@ -15,3 +15,9 @@ datasources:
     jsonData:
       timeInterval: 60s
     editable: false
+  - name: Tempo
+    uid: tempo
+    type: tempo
+    access: proxy
+    url: http://tempo:3200
+    editable: false
