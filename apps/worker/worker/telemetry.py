@@ -2,6 +2,8 @@
 
 import logging
 import os
+import resource
+import sys
 from contextlib import contextmanager
 from uuid import uuid4
 
@@ -78,6 +80,15 @@ def configure_metrics():
             ],
         )
         metrics.set_meter_provider(provider)
+        meter = provider.get_meter("watermarker")
+        meter.create_observable_counter(
+            "watermarker.worker.cpu", unit="s",
+            callbacks=[cpu_usage],
+        )
+        meter.create_observable_gauge(
+            "watermarker.worker.memory.peak", unit="By",
+            callbacks=[peak_memory],
+        )
     try:
         yield
     finally:
@@ -99,3 +110,14 @@ def configure_tracing():
     finally:
         if provider is not None:
             provider.shutdown()
+
+
+def cpu_usage(_options):
+    usage = resource.getrusage(resource.RUSAGE_SELF)
+    return [metrics.Observation(usage.ru_utime + usage.ru_stime)]
+
+
+def peak_memory(_options):
+    usage = resource.getrusage(resource.RUSAGE_SELF)
+    # macOS reports bytes; Linux reports KiB. This is lifetime peak RSS.
+    return [metrics.Observation(usage.ru_maxrss * (1 if sys.platform == "darwin" else 1024))]

@@ -55,6 +55,7 @@ func TestMeasurements(t *testing.T) {
 		t.Fatalf("got %d metrics", seen)
 	}
 
+	ImageCompleted(context.Background(), "done")
 	QueueDepth(context.Background(), "jobs", [3]int64{7, 2, 1})
 	OutboxBacklog(context.Background(), 2, 120)
 	BacklogObservation(context.Background(), "jobs", nil)
@@ -67,6 +68,11 @@ func TestMeasurements(t *testing.T) {
 	for _, scope := range data.ScopeMetrics {
 		for _, m := range scope.Metrics {
 			switch m.Name {
+			case "watermarker.images.completed":
+				points := m.Data.(metricdata.Sum[int64]).DataPoints
+				if len(points) != 1 || points[0].Value != 1 {
+					t.Fatal(points)
+				}
 			case "watermarker.queue.depth":
 				points := m.Data.(metricdata.Gauge[int64]).DataPoints
 				if len(points) != 3 {

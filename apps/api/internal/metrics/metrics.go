@@ -76,3 +76,10 @@ func BatchCompleted(ctx context.Context, seconds float64, failed bool) {
 	}
 	batchDuration.Record(ctx, seconds, metric.WithAttributes(attribute.String("outcome", outcome)))
 }
+
+var imageCompleted, _ = meter.Int64Counter("watermarker.images.completed")
+
+// ImageCompleted counts committed pending-to-terminal transitions, excluding duplicate results.
+func ImageCompleted(ctx context.Context, status string) {
+	imageCompleted.Add(ctx, 1, metric.WithAttributes(attribute.String("outcome", status)))
+}

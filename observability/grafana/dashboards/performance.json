@@ -1,0 +1,276 @@
+{
+  "uid": "watermarker-performance",
+  "title": "Watermarker performance",
+  "schemaVersion": 39,
+  "version": 1,
+  "refresh": "15s",
+  "time": {
+    "from": "now-30m",
+    "to": "now"
+  },
+  "panels": [
+    {
+      "id": 1,
+      "title": "Committed successful images / second",
+      "type": "timeseries",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "gridPos": {
+        "x": 0,
+        "y": 0,
+        "w": 12,
+        "h": 8
+      },
+      "description": "Committed terminal transitions only; duplicate results excluded. Export can lose observations on a crash. Use load-test JSON for exact run throughput.",
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "sum(rate(watermarker_images_completed_total{deployment_environment_name=\"development\",outcome=\"done\"}[$__rate_interval]))",
+          "legendFormat": "images/s"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "ops",
+          "min": 0,
+          "noValue": "No observations"
+        },
+        "overrides": []
+      }
+    },
+    {
+      "id": 2,
+      "title": "Batch duration p50 / p95",
+      "type": "timeseries",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "gridPos": {
+        "x": 12,
+        "y": 0,
+        "w": 12,
+        "h": 8
+      },
+      "description": "p95 includes queueing and result delivery, excludes uploads; retries can produce additional batch observations.",
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "histogram_quantile(0.95, sum by (le) (rate(watermarker_batch_duration_seconds_bucket{deployment_environment_name=\"development\"}[$__rate_interval])))",
+          "legendFormat": "p95"
+        },
+        {
+          "refId": "B",
+          "expr": "histogram_quantile(0.50, sum by (le) (rate(watermarker_batch_duration_seconds_bucket{deployment_environment_name=\"development\"}[$__rate_interval])))",
+          "legendFormat": "p50"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "s",
+          "min": 0,
+          "noValue": "No observations"
+        },
+        "overrides": []
+      }
+    },
+    {
+      "id": 3,
+      "title": "Worker processing duration p50 / p95",
+      "type": "timeseries",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "gridPos": {
+        "x": 0,
+        "y": 8,
+        "w": 12,
+        "h": 8
+      },
+      "description": "Attempt duration including S3 and result publishing, excludes queue wait. Includes failed attempts.",
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "histogram_quantile(0.95, sum by (le) (rate(watermarker_job_duration_seconds_bucket{deployment_environment_name=\"development\"}[$__rate_interval])))",
+          "legendFormat": "p95"
+        },
+        {
+          "refId": "B",
+          "expr": "histogram_quantile(0.50, sum by (le) (rate(watermarker_job_duration_seconds_bucket{deployment_environment_name=\"development\"}[$__rate_interval])))",
+          "legendFormat": "p50"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "s",
+          "min": 0,
+          "noValue": "No observations"
+        },
+        "overrides": []
+      }
+    },
+    {
+      "id": 4,
+      "title": "Processing errors and SQS redeliveries / second",
+      "type": "timeseries",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "gridPos": {
+        "x": 12,
+        "y": 8,
+        "w": 12,
+        "h": 8
+      },
+      "description": "Redeliveries include duplicates, not only failures. Manual retries are new messages.",
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "sum(rate(watermarker_job_duration_seconds_count{deployment_environment_name=\"development\",outcome=\"error\"}[$__rate_interval]))",
+          "legendFormat": "failed attempts"
+        },
+        {
+          "refId": "B",
+          "expr": "sum(rate(watermarker_job_redeliveries_total{deployment_environment_name=\"development\"}[$__rate_interval]))",
+          "legendFormat": "redeliveries"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "ops",
+          "min": 0,
+          "noValue": "No observations"
+        },
+        "overrides": []
+      }
+    },
+    {
+      "id": 5,
+      "title": "Jobs backlog",
+      "type": "timeseries",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "gridPos": {
+        "x": 0,
+        "y": 16,
+        "w": 12,
+        "h": 8
+      },
+      "description": "Fresh approximate queue counts; brief bursts may fall between samples.",
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "max by (state) ((watermarker_queue_depth{source=\"jobs\"}) and on (instance, source) ((watermarker_backlog_observation_success == 1) and on (instance, source) (time() - watermarker_backlog_observation_time_seconds < 90)))",
+          "legendFormat": "{{state}}"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "min": 0,
+          "noValue": "No observations"
+        },
+        "overrides": []
+      }
+    },
+    {
+      "id": 6,
+      "title": "Worker CPU \u2014 cores used",
+      "type": "timeseries",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "gridPos": {
+        "x": 12,
+        "y": 16,
+        "w": 12,
+        "h": 8
+      },
+      "description": "CPU seconds per wall second: 1 means one fully occupied CPU core. Each process has a separate line.",
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "sum by (instance) (rate(watermarker_worker_cpu_seconds_total{deployment_environment_name=\"development\"}[$__rate_interval]))",
+          "legendFormat": "{{instance}}"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "min": 0,
+          "noValue": "No observations"
+        },
+        "overrides": []
+      }
+    },
+    {
+      "id": 7,
+      "title": "Worker peak resident memory",
+      "type": "timeseries",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "gridPos": {
+        "x": 0,
+        "y": 24,
+        "w": 12,
+        "h": 8
+      },
+      "description": "Lifetime peak RSS per process, not current RSS. Restart workers between configurations for comparable peaks.",
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "max by (instance) (watermarker_worker_memory_peak_bytes{deployment_environment_name=\"development\"})",
+          "legendFormat": "{{instance}}"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "bytes",
+          "min": 0,
+          "noValue": "No observations"
+        },
+        "overrides": []
+      }
+    },
+    {
+      "id": 8,
+      "title": "Fresh worker instances",
+      "type": "timeseries",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "gridPos": {
+        "x": 12,
+        "y": 24,
+        "w": 12,
+        "h": 8
+      },
+      "description": "Count of processes exporting CPU telemetry in the last 45 seconds; set metric export interval to 15 seconds. Not a worker liveness guarantee.",
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "count(watermarker_worker_cpu_seconds_total{deployment_environment_name=\"development\"} and (time() - timestamp(watermarker_worker_cpu_seconds_total{deployment_environment_name=\"development\"}) < 45))",
+          "legendFormat": "workers"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "min": 0,
+          "noValue": "No observations"
+        },
+        "overrides": []
+      }
+    }
+  ]
+}

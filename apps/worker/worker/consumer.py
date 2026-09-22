@@ -22,6 +22,8 @@ propagator = TraceContextTextMapPropagator()
 VISIBILITY_SECONDS = 120
 HEARTBEAT_SECONDS = 40
 
+redeliveries = metrics.get_meter("watermarker").create_counter("watermarker.job.redeliveries")
+
 job_duration = metrics.get_meter("watermarker").create_histogram(
     "watermarker.job.duration",
     unit="s",
@@ -184,6 +186,8 @@ class Worker:
             MessageSystemAttributeNames=["ApproximateReceiveCount"],
         )
         for message in response.get("Messages", []):
+            if int(message.get("Attributes", {}).get("ApproximateReceiveCount", "1")) > 1:
+                redeliveries.add(1)
             try:
                 with self.visibility_heartbeat(message["ReceiptHandle"]):
                     self.process(message)

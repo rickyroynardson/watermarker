@@ -128,6 +128,7 @@ func (h *ResultHandler) apply(ctx context.Context, result Result, retryable bool
 	if err := tx.Commit(ctx); err != nil {
 		return err
 	}
+	metrics.ImageCompleted(ctx, result.Status)
 	if completed {
 		metrics.BatchCompleted(ctx, seconds, failed)
 	}

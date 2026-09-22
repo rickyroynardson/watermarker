@@ -5,9 +5,14 @@ from unittest.mock import patch
 from opentelemetry.sdk.metrics import MeterProvider
 from opentelemetry.sdk.metrics.export import Histogram, InMemoryMetricReader
 from worker.consumer import Worker
+from worker.telemetry import cpu_usage, peak_memory
 
 
 class MetricsTest(unittest.TestCase):
+    def test_process_resource_observations(self):
+        self.assertGreaterEqual(cpu_usage(None)[0].value, 0)
+        self.assertGreater(peak_memory(None)[0].value, 0)
+
     def test_invalid_job_records_error_and_reraises(self):
         reader = InMemoryMetricReader()
         provider = MeterProvider(metric_readers=[reader])

@@ -323,3 +323,12 @@ The alert uses fresh successful observations and takes the maximum across
 monitor replicas to avoid double-counting. Missing or failed database reads
 are covered by the six-source monitor-health alert. No database migration
 beyond the existing image-retry migration is needed.
+
+## Worker performance comparison
+
+The provisioned **Watermarker performance** dashboard compares time windows for
+throughput, batch/processing percentiles, retries, backlog, CPU and peak RSS.
+Use the [repeatable load-test instructions](../scripts/load/README.md) to run the
+same fixtures with one and two workers and compare saved median results.
+Restart updated workers and the consumer for new metrics; the dashboard reloads
+automatically. Reports hold exact per-run outcomes; metric rates remain estimates.
