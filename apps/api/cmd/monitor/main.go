@@ -10,6 +10,7 @@ import (
 
 	"github.com/joho/godotenv"
 	"github.com/rickyroynardson/watermarker/apps/api/internal/database"
+	"github.com/rickyroynardson/watermarker/apps/api/internal/image"
 	"github.com/rickyroynardson/watermarker/apps/api/internal/logger"
 	"github.com/rickyroynardson/watermarker/apps/api/internal/metrics"
 	"github.com/rickyroynardson/watermarker/apps/api/internal/outbox"
@@ -75,6 +76,16 @@ func main() {
 			log.Warn("observe outbox", zap.Error(err))
 		} else {
 			metrics.OutboxBacklog(ctx, count, age)
+		}
+
+		pollCtx, cancel = context.WithTimeout(ctx, 3*time.Second)
+		failures, err := image.UnresolvedFailures(pollCtx, db)
+		cancel()
+		metrics.BacklogObservation(ctx, "failed_images", err)
+		if err != nil {
+			log.Warn("observe unresolved failures", zap.Error(err))
+		} else {
+			metrics.UnresolvedFailures(ctx, failures)
 		}
 		select {
 		case <-ctx.Done():

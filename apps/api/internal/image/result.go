@@ -133,3 +133,9 @@ func (h *ResultHandler) apply(ctx context.Context, result Result, retryable bool
 	}
 	return nil
 }
+
+// UnresolvedFailures counts exhausted jobs awaiting an explicit retry.
+func UnresolvedFailures(ctx context.Context, db *pgxpool.Pool) (count int64, err error) {
+	err = db.QueryRow(ctx, "SELECT count(*) FROM images WHERE status = 'failed' AND retryable").Scan(&count)
+	return
+}

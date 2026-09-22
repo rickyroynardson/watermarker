@@ -36,3 +36,9 @@ func BacklogObservation(ctx context.Context, source string, err error) {
 	observationSuccess.Record(ctx, success, attrs)
 	observationTime.Record(ctx, time.Now().Unix(), attrs)
 }
+
+var unresolvedFailures, _ = meter.Int64Gauge("watermarker.images.unresolved")
+
+func UnresolvedFailures(ctx context.Context, count int64) {
+	unresolvedFailures.Record(ctx, count, metric.WithAttributes(attribute.String("source", "failed_images")))
+}

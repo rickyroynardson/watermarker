@@ -357,6 +357,38 @@
           "values": false
         }
       }
+    },
+    {
+      "id": 11,
+      "title": "Images needing attention \u2014 unresolved failures",
+      "type": "timeseries",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "gridPos": {
+        "x": 0,
+        "y": 46,
+        "w": 24,
+        "h": 8
+      },
+      "description": "Database count of failed, retryable images, even after the jobs DLQ is drained. Drops when a manual retry is accepted; excludes invalid-image failures. Missing, failed or stale observations are hidden.",
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "max ((watermarker_images_unresolved{service_name=\"watermarker-monitor\",deployment_environment_name=\"development\"}) and on (instance, source, deployment_environment_name) ((watermarker_backlog_observation_success{service_name=\"watermarker-monitor\",deployment_environment_name=\"development\"} == 1) and on (instance, source, deployment_environment_name) (time() - watermarker_backlog_observation_time_seconds{service_name=\"watermarker-monitor\",deployment_environment_name=\"development\"} < 90)))",
+          "legendFormat": "Needs attention"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "min": 0,
+          "noValue": "No fresh data",
+          "decimals": 0
+        },
+        "overrides": []
+      }
     }
   ]
 }

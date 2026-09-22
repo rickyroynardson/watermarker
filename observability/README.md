@@ -274,7 +274,8 @@ They evaluate every 20 seconds and link back to the queue dashboard.
 | Messages in dead-letter queue | Any DLQ has more than 0 messages | 2 minutes |
 | Persistent queue backlog | Jobs or results queue has more than 0 messages, including in-flight/delayed | 5 minutes |
 | Outbox dispatch delayed | Oldest pending intent is older than 120 seconds | 2 minutes |
-| Backlog monitoring unhealthy | Any of jobs, results, both DLQs, or outbox lacks a successful reading less than 90 seconds old | 2 minutes |
+| Images need attention | Failed, retryable images in PostgreSQL exceed 0 | 2 minutes |
+| Backlog monitoring unhealthy | Any of jobs, results, both DLQs, outbox, or failed images lacks a successful reading less than 90 seconds old | 2 minutes |
 
 These are development thresholds, scoped to `deployment.environment.name=development`
 and `service.name=watermarker-monitor`. Continuous healthy traffic can keep a queue
@@ -306,3 +307,19 @@ disposable Prometheus container. It verifies pending/firing timing, absent sourc
 failed/stale observations, and recovery without stopping application services.
 For a live exercise, stop the worker before submitting a batch, leave jobs queued
 for five minutes plus export delay, then restart it and watch the alert resolve.
+
+### Unresolved image failures
+
+Restart the updated `cmd/monitor` and Grafana to enable this metric and alert.
+The **Images needing attention — unresolved failures** panel reads
+`watermarker_images_unresolved` from PostgreSQL every monitoring cycle.
+It counts only `status = 'failed' AND retryable`: draining the jobs DLQ does
+not clear it, accepting a manual retry does, and invalid-image failures are
+excluded. A retry that exhausts again raises the count again.
+This is a current count, not a cumulative failure counter or proof that retry
+processing succeeded. The jobs/results DLQ panels remain unchanged.
+
+The alert uses fresh successful observations and takes the maximum across
+monitor replicas to avoid double-counting. Missing or failed database reads
+are covered by the six-source monitor-health alert. No database migration
+beyond the existing image-retry migration is needed.
