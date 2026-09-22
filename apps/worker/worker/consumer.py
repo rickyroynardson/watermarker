@@ -4,6 +4,7 @@ import json
 import logging
 from contextlib import contextmanager
 from functools import lru_cache
+from random import randint
 from threading import Event, Thread
 from time import perf_counter
 
@@ -180,10 +181,38 @@ class Worker:
             MaxNumberOfMessages=1,
             WaitTimeSeconds=20,
             VisibilityTimeout=VISIBILITY_SECONDS,
+            MessageSystemAttributeNames=["ApproximateReceiveCount"],
         )
         for message in response.get("Messages", []):
-            with self.visibility_heartbeat(message["ReceiptHandle"]):
-                self.process(message)
+            try:
+                with self.visibility_heartbeat(message["ReceiptHandle"]):
+                    self.process(message)
+            except Exception:
+                # Stop the heartbeat before setting the retry delay so it cannot overwrite it.
+                try:
+                    received = max(
+                        1,
+                        int(
+                            message.get("Attributes", {}).get(
+                                "ApproximateReceiveCount", "1"
+                            )
+                        ),
+                    )
+                    ceiling = min(900, 120 * 2 ** min(received - 1, 3))
+                    delay = randint(ceiling // 2, ceiling)
+                    self.sqs.change_message_visibility(
+                        QueueUrl=self.jobs_url,
+                        ReceiptHandle=message["ReceiptHandle"],
+                        VisibilityTimeout=delay,
+                    )
+                    log.warning(
+                        "job retry delayed",
+                        extra={"receive_count": received, "retry_delay_seconds": delay},
+                    )
+                except Exception:
+                    # Leave the message unacknowledged under its existing visibility timeout.
+                    log.exception("could not set job retry delay")
+                raise
 
     def run(self, stop: Event) -> None:
         while not stop.is_set():

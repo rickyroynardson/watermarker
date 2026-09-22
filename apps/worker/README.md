@@ -98,3 +98,16 @@ flag, Go tests do not require Python or `uv`.
 
 See [the logging setup](../../observability/README.md) for OpenTelemetry export,
 local Grafana/Loki, queries, and the pipeline smoke check.
+
+### Processing retry backoff
+
+Failed deliveries use SQS visibility changes with exponential backoff and
+jitter: 60–120 seconds after the first receive, 120–240 after the second,
+240–480 after the third, capped at 450–900 for subsequent receives.
+The existing redrive policy still limits receives (three locally).
+DLQ arrival therefore varies; for quick failures expect roughly 7–14 minutes
+plus polling. The heartbeat still protects active processing for 120 seconds,
+and stops before the retry delay is set. If setting the delay fails, the message
+remains unacknowledged under its existing visibility timeout.
+Invalid images still produce terminal results, without retrying.
+SQS receive count controls backoff; the application's manual attempt is unchanged.

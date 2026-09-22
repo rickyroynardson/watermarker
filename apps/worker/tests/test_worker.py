@@ -59,6 +59,35 @@ def make_worker():
 
 
 class WorkerTests(unittest.TestCase):
+    def test_poll_backoff_and_failed_visibility_update(self):
+        for received, bounds in ((1, (60, 120)), (2, (120, 240)), (3, (240, 480)), (99, (450, 900))):
+            worker = make_worker()
+            msg = message()
+            msg["Attributes"] = {"ApproximateReceiveCount": str(received)}
+            worker.sqs.receive_message.return_value = {"Messages": [msg]}
+            failure = RuntimeError("S3 unavailable")
+            with patch.object(worker, "process", side_effect=failure), patch(
+                "worker.consumer.randint", return_value=bounds[0]
+            ) as jitter:
+                with self.assertRaisesRegex(RuntimeError, "S3 unavailable"):
+                    worker.poll()
+                jitter.assert_called_once_with(*bounds)
+            worker.sqs.change_message_visibility.assert_called_once_with(
+                QueueUrl="jobs", ReceiptHandle="receipt", VisibilityTimeout=bounds[0]
+            )
+            worker.sqs.delete_message.assert_not_called()
+            self.assertEqual(worker.sqs.receive_message.call_args.kwargs["MessageSystemAttributeNames"], ["ApproximateReceiveCount"])
+        worker.sqs.change_message_visibility.side_effect = RuntimeError("SQS unavailable")
+        with patch.object(worker, "process", side_effect=failure):
+            with self.assertRaisesRegex(RuntimeError, "S3 unavailable"):
+                worker.poll()
+        worker.sqs.delete_message.assert_not_called()
+        worker = make_worker()
+        worker.sqs.receive_message.return_value = {"Messages": [message()]}
+        worker.poll()
+        worker.sqs.delete_message.assert_called_once()
+        worker.sqs.change_message_visibility.assert_not_called()
+
     def test_retry_attempt_roundtrip_and_validation(self):
         data = json.loads(message()["Body"])
         for attempt in (0, 1, 8):
