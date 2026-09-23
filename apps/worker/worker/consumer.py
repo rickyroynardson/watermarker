@@ -32,9 +32,10 @@ job_duration = metrics.get_meter("watermarker").create_histogram(
 
 
 class Worker:
-    def __init__(self, s3, sqs, bucket: str, jobs_url: str, results_url: str):
+    def __init__(self, s3, sqs, bucket: str, jobs_url: str, results_url: str, *, is_cancelled):
         self.s3, self.sqs = s3, sqs
         self.bucket, self.jobs_url, self.results_url = bucket, jobs_url, results_url
+        self.is_cancelled = is_cancelled
         # Cache immutable encoded watermark bytes, not mutable Pillow images (<=40 MiB).
         self.watermark = lru_cache(maxsize=4)(self.download)
 
@@ -93,6 +94,9 @@ class Worker:
             job = Job.parse(message["Body"])
             span = trace.get_current_span()
             span.set_attributes({"image.id": job.image_id, "batch.id": job.batch_id})
+            if self.skip_cancelled(job, message):
+                outcome = "cancelled"
+                return
             result = job.result()
             if not self.output_exists(job.output_key):
                 try:
@@ -109,6 +113,9 @@ class Worker:
                     result = job.result(str(exc))
                     span.set_status(trace.StatusCode.ERROR, "invalid image")
                 else:
+                    if self.skip_cancelled(job, message):
+                        outcome = "cancelled"
+                        return
                     try:
                         self.s3.put_object(
                             Bucket=self.bucket,
@@ -151,6 +158,13 @@ class Worker:
             )
         finally:
             job_duration.record(perf_counter() - start, {"outcome": outcome})
+
+    def skip_cancelled(self, job, message):
+        if not self.is_cancelled(job.batch_id):
+            return False
+        self.sqs.delete_message(QueueUrl=self.jobs_url, ReceiptHandle=message["ReceiptHandle"])
+        log.info("cancelled job skipped", extra={"batch_id": job.batch_id, "image_id": job.image_id})
+        return True
 
     @contextmanager
     def visibility_heartbeat(self, receipt: str):

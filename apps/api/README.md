@@ -241,3 +241,27 @@ Malformed or unknown-image messages remain for operator investigation.
 Results DLQ recovery stays separate: fix delivery and redrive results,
 rather than reprocessing images. Completion metrics can record another
 completion after a manual retry; duration is still from original submission.
+
+## Cancel a batch
+
+`POST /batches/:id/cancel` uses the owning API key. It atomically cancels pending
+and retryable failed images and removes unsent outbox entries. Completed outputs
+and permanent failures stay unchanged. Repeated cancellation succeeds; a terminal
+batch with nothing left to cancel returns 409. Cancelled batches cannot be retried.
+Batch details expose `cancelled_at` and status `cancelled`.
+
+The batch row lock serializes cancellation, results and retries. Late results or
+jobs DLQ deliveries cannot overwrite cancelled images. An outbox send already in
+flight can still enqueue a message; workers check cancellation before processing.
+Cancellation is cooperative: computation already started may finish and a race
+after the final check can leave an unused output object. Cancellation does not
+delete stored uploads or outputs and is not counted as successful processing.
+
+Apply `make migrate-up`, set a shared randomly generated `WORKER_API_TOKEN` in
+the API and worker environments, and set `WORKER_API_URL` for workers (locally
+`http://localhost:8080`). Generate a token with `openssl rand -hex 32`.
+Restart API, consumer and workers, and rebuild/restart the web app.
+
+Workers use `GET /internal/batches/:id/cancellation` with that bearer token.
+This endpoint only returns a cancellation boolean; it grants no mutation access.
+Use HTTPS when workers connect across hosts. An absent token disables the route.

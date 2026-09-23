@@ -126,3 +126,23 @@ func (h *BatchHandler) RetryImage(c *gin.Context) {
 		utils.RespondSuccess(c, 202, gin.H{"id": imageID})
 	}
 }
+
+func (h *BatchHandler) Cancel(c *gin.Context) {
+	id, err := uuid.Parse(c.Param("id"))
+	if err != nil {
+		utils.RespondError(c, 400, utils.CodeInvalidRequest, "invalid batch ID")
+		return
+	}
+	err = h.service.repository.Cancel(c.Request.Context(), auth.APIKeyID(c), id)
+	switch {
+	case errors.Is(err, ErrBatchNotFound):
+		utils.RespondError(c, 404, "not_found", "batch not found")
+	case errors.Is(err, ErrCancelConflict):
+		utils.RespondError(c, 409, "cancel_conflict", "batch has no remaining work to cancel")
+	case err != nil:
+		zap.L().Error("cancel batch", zap.Error(err))
+		utils.RespondError(c, 500, utils.CodeInternal, "something went wrong")
+	default:
+		utils.RespondSuccess(c, 200, gin.H{"id": id})
+	}
+}

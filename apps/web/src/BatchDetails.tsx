@@ -6,6 +6,7 @@ export default function BatchDetails({ id, apiKey }: { id: string; apiKey: strin
   const [batch, setBatch] = useState<Details>();
   const [error, setError] = useState("");
   const [refresh, setRefresh] = useState(0);
+  const [cancelling, setCancelling] = useState(false);
   const [retrying, setRetrying] = useState<string[]>([]);
   const [retryError, setRetryError] = useState("");
   const [loading, setLoading] = useState(true);
@@ -57,6 +58,20 @@ export default function BatchDetails({ id, apiKey }: { id: string; apiKey: strin
     }
   }
 
+  async function cancelBatch() {
+    setCancelling(true);
+    setRetryError("");
+    try {
+      await request(`/batches/${id}/cancel`, apiKey, { method: "POST" });
+      setRefresh((value) => value + 1);
+    } catch (cause) {
+      setRetryError(cause instanceof Error ? cause.message : "Could not cancel batch.");
+    } finally {
+      setCancelling(false);
+    }
+  }
+
+  const cancelled = batch?.images.filter((image) => image.status === "cancelled").length || 0;
   const done = batch?.images.filter((image) => image.status === "done").length || 0;
   const failed = batch?.images.filter((image) => image.status === "failed").length || 0;
   return (
@@ -66,6 +81,14 @@ export default function BatchDetails({ id, apiKey }: { id: string; apiKey: strin
     >
       <div className="flex flex-wrap items-center justify-between gap-3">
         <h2 id="results-heading">Batch results</h2>
+        {batch && (batch.status === "pending" || batch.images.some((image) => image.retryable)) && (
+          <button
+            disabled={loading || cancelling || retrying.length > 0}
+            onClick={() => void cancelBatch()}
+          >
+            {cancelling ? "Cancelling…" : "Cancel remaining work"}
+          </button>
+        )}
         <button disabled={loading} onClick={() => setRefresh((value) => value + 1)}>
           {loading ? "Refreshing…" : "Refresh results & links"}
         </button>
@@ -89,11 +112,13 @@ export default function BatchDetails({ id, apiKey }: { id: string; apiKey: strin
                 ? "Queued / processing"
                 : batch.status === "failed"
                   ? "Finished with errors"
-                  : "Completed"}
+                  : batch.status === "cancelled"
+                    ? "Cancelled"
+                    : "Completed"}
             </p>
             <p className="text-slate-600">
-              {done} of {batch.images.length} completed · {failed} failed ·{" "}
-              {batch.images.length - done - failed} pending
+              {done} of {batch.images.length} completed · {failed} failed · {cancelled} cancelled ·{" "}
+              {batch.images.length - done - failed - cancelled} pending
             </p>
             {batch.duration_seconds != null && (
               <p className="text-slate-600">
@@ -104,7 +129,7 @@ export default function BatchDetails({ id, apiKey }: { id: string; apiKey: strin
             <progress
               className="mt-2 w-full accent-slate-900"
               aria-label="Images finished processing"
-              value={done + failed}
+              value={done + failed + cancelled}
               max={Math.max(batch.images.length, 1)}
             />
           </>
@@ -121,9 +146,11 @@ export default function BatchDetails({ id, apiKey }: { id: string; apiKey: strin
                 ? "Queued / processing"
                 : image.status === "done"
                   ? "Completed"
-                  : image.retryable
-                    ? "Needs attention"
-                    : "Failed"}
+                  : image.status === "cancelled"
+                    ? "Cancelled"
+                    : image.retryable
+                      ? "Needs attention"
+                      : "Failed"}
             </p>
             <p className="mt-1 break-all font-mono text-xs text-slate-500">{image.id}</p>
             {image.error && <p className="mt-3 break-words text-sm text-red-700">{image.error}</p>}
@@ -131,7 +158,7 @@ export default function BatchDetails({ id, apiKey }: { id: string; apiKey: strin
               (image.retryable ? (
                 <button
                   className="mt-3"
-                  disabled={loading || retrying.includes(image.id)}
+                  disabled={loading || cancelling || retrying.includes(image.id)}
                   onClick={() => void retry(image)}
                 >
                   {retrying.includes(image.id) ? "Retrying…" : "Retry image"}

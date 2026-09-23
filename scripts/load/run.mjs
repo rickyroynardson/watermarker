@@ -80,7 +80,7 @@ export async function run({ api, key, source, watermark, images, workers, runs, 
       row.failed = details.images.filter((i) => i.status === "failed").length;
       row.images_per_second = row.duration_seconds > 0 ? row.done / row.duration_seconds : null;
       row.grafana = `http://localhost:3000/d/watermarker-performance?from=${Date.parse(row.submitted_at) - 60000}&to=${Date.now() + 60000}`;
-      if (row.failed) throw Error("Batch contains failures; stopping comparison.");
+      if (details.status !== "done") throw Error("Batch contains failures; stopping comparison.");
     } catch (error) {
       row.error = error.message;
       throw error;

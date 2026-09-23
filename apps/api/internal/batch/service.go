@@ -25,7 +25,10 @@ const (
 	CodeUploadNotFound      utils.ErrorCode = "upload_not_found"
 )
 
+var ErrCancelConflict = errors.New("batch has no cancellable images")
+
 type batchRepository interface {
+	Cancel(context.Context, uuid.UUID, uuid.UUID) error
 	RetryImage(context.Context, uuid.UUID, uuid.UUID, uuid.UUID, int) error
 	GetBatch(context.Context, uuid.UUID, uuid.UUID) (BatchDetails, error)
 	ListBatches(ctx context.Context, apiKeyID uuid.UUID, before, beforeID any, limit int) ([]ListBatchItem, error)
@@ -201,6 +204,9 @@ func (s *BatchService) GetBatch(ctx context.Context, owner, id uuid.UUID) (Batch
 				return BatchDetails{}, err
 			}
 		}
+	}
+	if b.CancelledAt != nil {
+		b.Status = "cancelled"
 	}
 	return b, nil
 }

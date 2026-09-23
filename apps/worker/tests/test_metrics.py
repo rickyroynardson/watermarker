@@ -22,7 +22,7 @@ class MetricsTest(unittest.TestCase):
                 patch("worker.consumer.job_duration", histogram),
                 self.assertRaises(JSONDecodeError),
             ):
-                Worker(None, None, "bucket", "jobs", "results").process(
+                Worker(None, None, "bucket", "jobs", "results", is_cancelled=lambda _: False).process(
                     {"Body": "invalid"}
                 )
             data = reader.get_metrics_data()

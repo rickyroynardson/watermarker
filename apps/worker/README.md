@@ -111,3 +111,16 @@ and stops before the retry delay is set. If setting the delay fails, the message
 remains unacknowledged under its existing visibility timeout.
 Invalid images still produce terminal results, without retrying.
 SQS receive count controls backoff; the application's manual attempt is unchanged.
+
+## Cancellation
+
+Also required: `WORKER_API_URL` and `WORKER_API_TOKEN`. The token must match the
+API's setting; sharing `apps/api/.env` keeps local values consistent. Apply the
+cancellation migration and restart the API before starting updated workers.
+
+Each received job checks the API before S3 work and again before writing newly
+processed output. Cancelled jobs are acknowledged without publishing results.
+API/network/authentication failures leave jobs unacknowledged with normal retry
+backoff, so keep the API available while workers run. Checks are not cached.
+Cancellation cannot interrupt an ongoing Pillow operation; late results remain
+blocked by the database state even if cancellation races the final worker check.

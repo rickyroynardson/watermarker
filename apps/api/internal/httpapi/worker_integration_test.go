@@ -3,10 +3,12 @@ package httpapi_test
 import (
 	"bytes"
 	"context"
+	"github.com/rickyroynardson/watermarker/apps/api/internal/httpapi"
 	stdimage "image"
 	"image/color"
 	"image/draw"
 	"image/png"
+	"net/http/httptest"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -50,6 +52,10 @@ func testPythonWorker(t *testing.T, db *pgxpool.Pool, s3Client *s3.Client, sqsCl
 	require.NoError(t, err)
 	results, err := queue.NewSQS(ctx, aws.ToString(resultsQueue.QueueUrl))
 	require.NoError(t, err)
+	t.Setenv("WORKER_API_TOKEN", "worker-integration-token")
+	server := httptest.NewServer(httpapi.NewRouter(db, objects))
+	defer server.Close()
+	t.Setenv("WORKER_API_URL", server.URL)
 	workerDir, err := filepath.Abs("../../../worker")
 	require.NoError(t, err)
 	runWorker := func() {
@@ -128,4 +134,20 @@ func testPythonWorker(t *testing.T, db *pgxpool.Pool, s3Client *s3.Client, sqsCl
 	require.NoError(t, db.QueryRow(ctx, "SELECT status, error FROM images WHERE batch_id = $1", bad.ID).Scan(&status, &reason))
 	require.Equal(t, "failed", status)
 	require.NotEmpty(t, reason)
+	// A job already in SQS is acknowledged without reading nonexistent S3 inputs.
+	cancelledBatch := batch.Batch{ID: uuid.New(), APIKeyID: owner, WatermarkKey: "sources/" + owner.String() + "/" + uuid.NewString(), Images: []batch.Image{{ID: uuid.New(), SourceKey: "sources/" + owner.String() + "/" + uuid.NewString()}}}
+	repo := batch.NewRepository(db)
+	_, err = repo.CreateBatch(ctx, cancelledBatch)
+	require.NoError(t, err)
+	sent, err = outbox.DispatchOne(ctx, db, jobs.Send)
+	require.NoError(t, err)
+	require.True(t, sent)
+	require.NoError(t, repo.Cancel(ctx, owner, cancelledBatch.ID))
+	runWorker()
+	require.NoError(t, db.QueryRow(ctx, "SELECT status FROM images WHERE batch_id=$1", cancelledBatch.ID).Scan(&status))
+	require.Equal(t, "cancelled", status)
+	remaining, err := sqsClient.ReceiveMessage(ctx, &sqs.ReceiveMessageInput{QueueUrl: resultsQueue.QueueUrl})
+	require.NoError(t, err)
+	require.Empty(t, remaining.Messages)
+
 }

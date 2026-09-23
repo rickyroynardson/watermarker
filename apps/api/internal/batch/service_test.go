@@ -18,6 +18,8 @@ type failingRepo struct {
 	lookupErr, createErr error
 }
 
+func (r *failingRepo) Cancel(context.Context, uuid.UUID, uuid.UUID) error { panic("not used") }
+
 func (r *failingRepo) RetryImage(context.Context, uuid.UUID, uuid.UUID, uuid.UUID, int) error {
 	panic("not used")
 }

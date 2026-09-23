@@ -224,6 +224,26 @@ func TestBatchAPIIntegration(t *testing.T) {
 		counts(t, "unauthorized", 0, 0)
 	})
 
+	t.Run("cancel endpoint and worker read authentication", func(t *testing.T) {
+		t.Setenv("WORKER_API_TOKEN", "test-worker-token")
+		b := batch.Batch{ID: uuid.New(), APIKeyID: owner, WatermarkKey: "sources/mark", Images: []batch.Image{{ID: uuid.New(), SourceKey: "sources/img"}}}
+		repo := batch.NewRepository(db)
+		_, err := repo.CreateBatch(ctx, b)
+		require.NoError(t, err)
+		defer db.Exec(ctx, "DELETE FROM batches WHERE id=$1", b.ID)
+		path := "/batches/" + b.ID.String() + "/cancel"
+		require.Equal(t, 401, request(http.MethodPost, path, "", "", "").Code)
+		_, other := seedKey()
+		require.Equal(t, 404, request(http.MethodPost, path, other, "", "").Code)
+		internal := "/internal/batches/" + b.ID.String() + "/cancellation"
+		require.Equal(t, 401, request(http.MethodGet, internal, token, "", "").Code)
+		require.Contains(t, request(http.MethodGet, internal, "test-worker-token", "", "").Body.String(), `"cancelled":false`)
+		require.Equal(t, 200, request(http.MethodPost, path, token, "", "").Code)
+		require.Equal(t, 200, request(http.MethodPost, path, token, "", "").Code)
+		require.Contains(t, request(http.MethodGet, internal, "test-worker-token", "", "").Body.String(), `"cancelled":true`)
+		require.Contains(t, request(http.MethodGet, "/batches/"+b.ID.String(), token, "", "").Body.String(), `"status":"cancelled"`)
+	})
+
 	t.Run("retry endpoint authorization and validation", func(t *testing.T) {
 		id, imageID := uuid.New(), uuid.New()
 		_, err := db.Exec(ctx, "INSERT INTO batches(id,api_key_id,watermark_key) VALUES($1,$2,'sources/mark')", id, owner)

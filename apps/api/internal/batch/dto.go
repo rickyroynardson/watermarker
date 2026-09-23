@@ -58,6 +58,7 @@ type Image struct {
 
 // BatchDetails includes signed output links only for completed images.
 type BatchDetails struct {
+	CancelledAt     *time.Time     `json:"cancelled_at"`
 	CompletedAt     *time.Time     `json:"completed_at"`
 	DurationSeconds *float64       `json:"duration_seconds"`
 	ID              uuid.UUID      `json:"id"`

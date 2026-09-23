@@ -133,9 +133,9 @@ func (r *BatchRepository) GetBatch(ctx context.Context, owner, id uuid.UUID) (Ba
 	var b BatchDetails
 	err := r.dbpool.QueryRow(ctx, `
 		SELECT id, watermark_key, created_at, completed_at,
- EXTRACT(EPOCH FROM (completed_at - created_at))::double precision AS duration_seconds FROM batches
+ EXTRACT(EPOCH FROM (completed_at - created_at))::double precision AS duration_seconds, cancelled_at FROM batches
 		WHERE id = $1 AND api_key_id = $2
-	`, id, owner).Scan(&b.ID, &b.WatermarkKey, &b.CreatedAt, &b.CompletedAt, &b.DurationSeconds)
+	`, id, owner).Scan(&b.ID, &b.WatermarkKey, &b.CreatedAt, &b.CompletedAt, &b.DurationSeconds, &b.CancelledAt)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return b, ErrBatchNotFound
 	}
@@ -167,12 +167,16 @@ func (r *BatchRepository) RetryImage(ctx context.Context, owner, batchID, imageI
 	}
 	defer tx.Rollback(ctx)
 	var watermark string
-	err = tx.QueryRow(ctx, "SELECT watermark_key FROM batches WHERE id=$1 AND api_key_id=$2 FOR UPDATE", batchID, owner).Scan(&watermark)
+	var cancelled bool
+	err = tx.QueryRow(ctx, "SELECT watermark_key, cancelled_at IS NOT NULL FROM batches WHERE id=$1 AND api_key_id=$2 FOR UPDATE", batchID, owner).Scan(&watermark, &cancelled)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return ErrBatchNotFound
 	}
 	if err != nil {
 		return err
+	}
+	if cancelled {
+		return ErrRetryConflict
 	}
 	var current int
 	var retryable bool
@@ -208,6 +212,42 @@ func (r *BatchRepository) RetryImage(ctx context.Context, owner, batchID, imageI
 		return err
 	}
 	_, err = tx.Exec(ctx, "UPDATE batches SET completed_at=NULL WHERE id=$1", batchID)
+	if err != nil {
+		return err
+	}
+	return tx.Commit(ctx)
+}
+
+// Cancel uses the same batch lock as result handling and retry.
+func (r *BatchRepository) Cancel(ctx context.Context, owner, id uuid.UUID) error {
+	tx, err := r.dbpool.Begin(ctx)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback(ctx)
+	var cancelled bool
+	err = tx.QueryRow(ctx, "SELECT cancelled_at IS NOT NULL FROM batches WHERE id=$1 AND api_key_id=$2 FOR UPDATE", id, owner).Scan(&cancelled)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return ErrBatchNotFound
+	}
+	if err != nil {
+		return err
+	}
+	if cancelled {
+		return tx.Commit(ctx)
+	}
+	tag, err := tx.Exec(ctx, "UPDATE images SET status='cancelled', error=NULL, output_key=NULL, retryable=false, updated_at=clock_timestamp() WHERE batch_id=$1 AND (status='pending' OR retryable)", id)
+	if err != nil {
+		return err
+	}
+	if tag.RowsAffected() == 0 {
+		return ErrCancelConflict
+	}
+	_, err = tx.Exec(ctx, "DELETE FROM outbox_messages WHERE image_id IN (SELECT id FROM images WHERE batch_id=$1)", id)
+	if err != nil {
+		return err
+	}
+	_, err = tx.Exec(ctx, "UPDATE batches SET cancelled_at=clock_timestamp(), completed_at=clock_timestamp() WHERE id=$1", id)
 	if err != nil {
 		return err
 	}

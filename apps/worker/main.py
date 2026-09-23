@@ -2,10 +2,12 @@ import argparse
 import logging
 import os
 import signal
+from functools import partial
 from threading import Event
 
 import boto3
 from botocore.config import Config
+from worker.cancellation import is_cancelled
 from worker.consumer import Worker
 from worker.telemetry import configure_logging, configure_metrics, configure_tracing
 
@@ -22,7 +24,13 @@ def main():
         help="poll once, then exit (failures exit nonzero)",
     )
     args = parser.parse_args()
-    required = ("S3_BUCKET", "SQS_JOBS_QUEUE_URL", "SQS_RESULTS_QUEUE_URL")
+    required = (
+        "S3_BUCKET",
+        "SQS_JOBS_QUEUE_URL",
+        "SQS_RESULTS_QUEUE_URL",
+        "WORKER_API_URL",
+        "WORKER_API_TOKEN",
+    )
     for name in required:
         if not os.environ.get(name):
             parser.error(f"{name} is required")
@@ -40,6 +48,9 @@ def main():
         os.environ["S3_BUCKET"],
         os.environ["SQS_JOBS_QUEUE_URL"],
         os.environ["SQS_RESULTS_QUEUE_URL"],
+        is_cancelled=partial(
+            is_cancelled, os.environ["WORKER_API_URL"], os.environ["WORKER_API_TOKEN"]
+        ),
     )
     stop = Event()
     for sig in (signal.SIGINT, signal.SIGTERM):

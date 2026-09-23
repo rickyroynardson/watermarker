@@ -49,6 +49,60 @@ func testPipeline(t *testing.T, ctx context.Context, originalDB *pgxpool.Pool, s
 		return count
 	}
 
+	t.Run("cancel racing completion has one terminal winner", func(t *testing.T) {
+		b, err := repo.CreateBatch(ctx, newBatch())
+		require.NoError(t, err)
+		defer db.Exec(ctx, "DELETE FROM batches WHERE id=$1", b.ID)
+		raw, err := json.Marshal(image.Result{Version: 1, JobType: "composite", BatchID: b.ID, ImageID: b.Images[0].ID, Status: "done", OutputKey: "processed/" + b.ID.String() + "/" + b.Images[0].ID.String() + ".png"})
+		require.NoError(t, err)
+		done := make(chan error, 1)
+		go func() { done <- image.NewResultHandler(db).Handle(ctx, string(raw)) }()
+		cancelErr := repo.Cancel(ctx, owner, b.ID)
+		require.NoError(t, <-done)
+		details, err := repo.GetBatch(ctx, owner, b.ID)
+		require.NoError(t, err)
+		if cancelErr == nil {
+			require.Equal(t, "cancelled", details.Images[0].Status)
+		} else {
+			require.ErrorIs(t, cancelErr, batch.ErrCancelConflict)
+			require.Equal(t, "done", details.Images[0].Status)
+			require.Nil(t, details.CancelledAt)
+		}
+	})
+	t.Run("cancellation preserves results and fences late deliveries", func(t *testing.T) {
+		b := newBatch()
+		b.Images = append(b.Images, batch.Image{ID: uuid.New(), SourceKey: "sources/" + owner.String() + "/" + uuid.NewString()})
+		_, err := repo.CreateBatch(ctx, b)
+		require.NoError(t, err)
+		defer db.Exec(ctx, "DELETE FROM batches WHERE id=$1", b.ID)
+		handler := image.NewResultHandler(db)
+		result := image.Result{Version: 1, JobType: "composite", BatchID: b.ID, ImageID: b.Images[0].ID, Status: "done", OutputKey: "processed/" + b.ID.String() + "/" + b.Images[0].ID.String() + ".png"}
+		raw, err := json.Marshal(result)
+		require.NoError(t, err)
+		require.NoError(t, handler.Handle(ctx, string(raw)))
+		require.ErrorIs(t, repo.Cancel(ctx, uuid.New(), b.ID), batch.ErrBatchNotFound)
+		require.NoError(t, repo.Cancel(ctx, owner, b.ID))
+		require.NoError(t, repo.Cancel(ctx, owner, b.ID))
+		require.Zero(t, countJobs())
+		require.ErrorIs(t, repo.RetryImage(ctx, owner, b.ID, b.Images[1].ID, 0), batch.ErrRetryConflict)
+		result.ImageID = b.Images[1].ID
+		result.OutputKey = "processed/" + b.ID.String() + "/" + result.ImageID.String() + ".png"
+		raw, err = json.Marshal(result)
+		require.NoError(t, err)
+		require.NoError(t, handler.Handle(ctx, string(raw)))
+		require.NoError(t, handler.HandleDeadJob(ctx, string(raw)))
+		details, err := repo.GetBatch(ctx, owner, b.ID)
+		require.NoError(t, err)
+		require.NotNil(t, details.CancelledAt)
+		statuses := map[uuid.UUID]string{}
+		for _, img := range details.Images {
+			statuses[img.ID] = img.Status
+			require.False(t, img.Retryable)
+		}
+		require.Equal(t, "done", statuses[b.Images[0].ID])
+		require.Equal(t, "cancelled", statuses[b.Images[1].ID])
+	})
+
 	t.Run("exhausted jobs retry atomically and reject stale messages", func(t *testing.T) {
 		b, err := repo.CreateBatch(ctx, newBatch())
 		require.NoError(t, err)

@@ -55,20 +55,46 @@ def make_worker():
     s3.head_object.side_effect = head
     s3.get_object.side_effect = download
     s3.put_object.side_effect = put
-    return Worker(s3, sqs, "bucket", "jobs", "results")
+    return Worker(s3, sqs, "bucket", "jobs", "results", is_cancelled=lambda _: False)
 
 
 class WorkerTests(unittest.TestCase):
+    def test_cancelled_jobs_skip_storage_and_results(self):
+        worker = make_worker()
+        worker.is_cancelled = Mock(return_value=True)
+        worker.process(message())
+        worker.s3.head_object.assert_not_called()
+        worker.sqs.send_message.assert_not_called()
+        worker.sqs.delete_message.assert_called_once()
+        worker = make_worker()
+        worker.is_cancelled = Mock(side_effect=[False, True])
+        worker.process(message())
+        worker.s3.put_object.assert_not_called()
+        worker.sqs.send_message.assert_not_called()
+        worker.sqs.delete_message.assert_called_once()
+        worker = make_worker()
+        worker.is_cancelled = Mock(side_effect=RuntimeError("API unavailable"))
+        with self.assertRaisesRegex(RuntimeError, "API unavailable"):
+            worker.process(message())
+        worker.s3.head_object.assert_not_called()
+        worker.sqs.delete_message.assert_not_called()
+
     def test_poll_backoff_and_failed_visibility_update(self):
-        for received, bounds in ((1, (60, 120)), (2, (120, 240)), (3, (240, 480)), (99, (450, 900))):
+        for received, bounds in (
+            (1, (60, 120)),
+            (2, (120, 240)),
+            (3, (240, 480)),
+            (99, (450, 900)),
+        ):
             worker = make_worker()
             msg = message()
             msg["Attributes"] = {"ApproximateReceiveCount": str(received)}
             worker.sqs.receive_message.return_value = {"Messages": [msg]}
             failure = RuntimeError("S3 unavailable")
-            with patch.object(worker, "process", side_effect=failure), patch(
-                "worker.consumer.randint", return_value=bounds[0]
-            ) as jitter:
+            with (
+                patch.object(worker, "process", side_effect=failure),
+                patch("worker.consumer.randint", return_value=bounds[0]) as jitter,
+            ):
                 with self.assertRaisesRegex(RuntimeError, "S3 unavailable"):
                     worker.poll()
                 jitter.assert_called_once_with(*bounds)
@@ -76,11 +102,20 @@ class WorkerTests(unittest.TestCase):
                 QueueUrl="jobs", ReceiptHandle="receipt", VisibilityTimeout=bounds[0]
             )
             worker.sqs.delete_message.assert_not_called()
-            self.assertEqual(worker.sqs.receive_message.call_args.kwargs["MessageSystemAttributeNames"], ["ApproximateReceiveCount"])
-        worker.sqs.change_message_visibility.side_effect = RuntimeError("SQS unavailable")
-        with patch.object(worker, "process", side_effect=failure):
-            with self.assertRaisesRegex(RuntimeError, "S3 unavailable"):
-                worker.poll()
+            self.assertEqual(
+                worker.sqs.receive_message.call_args.kwargs[
+                    "MessageSystemAttributeNames"
+                ],
+                ["ApproximateReceiveCount"],
+            )
+        worker.sqs.change_message_visibility.side_effect = RuntimeError(
+            "SQS unavailable"
+        )
+        with (
+            patch.object(worker, "process", side_effect=failure),
+            self.assertRaisesRegex(RuntimeError, "S3 unavailable"),
+        ):
+            worker.poll()
         worker.sqs.delete_message.assert_not_called()
         worker = make_worker()
         worker.sqs.receive_message.return_value = {"Messages": [message()]}
@@ -99,7 +134,6 @@ class WorkerTests(unittest.TestCase):
             data["attempt"] = attempt
             with self.assertRaises(ValueError):
                 Job.parse(json.dumps(data))
-
 
     def test_composite_preserves_alpha_and_places_watermark(self):
         output = composite(encoded(), encoded((255, 0, 0, 128), (4, 4)))

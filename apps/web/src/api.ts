@@ -7,11 +7,11 @@ export type Batch = {
 };
 export type BatchPage = { batches: Batch[] | null; next_cursor: string | null };
 export type BatchDetails = Batch & {
-  status: "pending" | "done" | "failed";
+  status: "pending" | "done" | "failed" | "cancelled";
   images: {
     id: string;
     source_key: string;
-    status: "pending" | "done" | "failed";
+    status: "pending" | "done" | "failed" | "cancelled";
     error?: string;
     attempt: number;
     retryable: boolean;
