@@ -14,6 +14,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/rickyroynardson/watermarker/apps/api/internal/batch"
+	"github.com/rickyroynardson/watermarker/apps/api/internal/cleanup"
 	"github.com/rickyroynardson/watermarker/apps/api/internal/image"
 	"github.com/rickyroynardson/watermarker/apps/api/internal/outbox"
 	"github.com/rickyroynardson/watermarker/apps/api/internal/queue"
@@ -48,6 +49,59 @@ func testPipeline(t *testing.T, ctx context.Context, originalDB *pgxpool.Pool, s
 		require.NoError(t, db.QueryRow(ctx, "SELECT count(*) FROM outbox_messages").Scan(&count))
 		return count
 	}
+
+	t.Run("cleanup preserves shared references and unfinished work", func(t *testing.T) {
+		cutoff := time.Now().UTC().Truncate(time.Microsecond).Add(-30 * 24 * time.Hour)
+		makeBatch := func(age time.Duration, status string, retryable, outboxPending bool) batch.Batch {
+			b, err := repo.CreateBatch(ctx, newBatch())
+			require.NoError(t, err)
+			t.Cleanup(func() { _, err := db.Exec(ctx, "DELETE FROM batches WHERE id=$1", b.ID); require.NoError(t, err) })
+			_, err = db.Exec(ctx, "UPDATE batches SET completed_at=$2 WHERE id=$1", b.ID, cutoff.Add(age))
+			require.NoError(t, err)
+			_, err = db.Exec(ctx, "UPDATE images SET status=$2::text::image_status, error=CASE WHEN $2::text='failed' THEN 'test failure' END, retryable=$3 WHERE batch_id=$1", b.ID, status, retryable)
+			require.NoError(t, err)
+			if !outboxPending {
+				_, err = db.Exec(ctx, "DELETE FROM outbox_messages WHERE image_id=$1", b.Images[0].ID)
+				require.NoError(t, err)
+			}
+			return b
+		}
+		old := makeBatch(-time.Hour, "cancelled", false, false)
+		recent := makeBatch(time.Hour, "cancelled", false, false)
+		pending := makeBatch(-time.Hour, "pending", false, false)
+		retryable := makeBatch(-time.Hour, "failed", true, false)
+		unsent := makeBatch(-time.Hour, "failed", false, true)
+		boundary := makeBatch(0, "cancelled", false, false)
+		// A source in an old batch is also a watermark of a retained batch.
+		_, err := db.Exec(ctx, "UPDATE batches SET watermark_key=$2 WHERE id=$1", recent.ID, old.Images[0].SourceKey)
+		require.NoError(t, err)
+		second := makeBatch(-time.Hour, "failed", false, false)
+		_, err = db.Exec(ctx, "UPDATE batches SET watermark_key=$2 WHERE id=$1", second.ID, old.WatermarkKey)
+		require.NoError(t, err)
+		output := "processed/" + second.ID.String() + "/" + second.Images[0].ID.String() + ".png"
+		_, err = db.Exec(ctx, "UPDATE images SET status='done',error=NULL,output_key=$2 WHERE batch_id=$1", second.ID, output)
+		require.NoError(t, err)
+		plan, err := cleanup.Plan(ctx, db, cutoff)
+		require.NoError(t, err)
+		keys := map[string][]uuid.UUID{}
+		for _, candidate := range plan {
+			keys[candidate.Key] = candidate.BatchIDs
+		}
+		require.Len(t, keys, 3)
+		require.ElementsMatch(t, []uuid.UUID{old.ID, second.ID}, keys[old.WatermarkKey])
+		require.Contains(t, keys, second.Images[0].SourceKey)
+		require.Contains(t, keys, output)
+		require.NotContains(t, keys, old.Images[0].SourceKey)
+		for _, b := range []batch.Batch{recent, pending, retryable, unsent, boundary} {
+			require.NotContains(t, keys, b.Images[0].SourceKey)
+		}
+		// Dry-run cannot alter image state or outbox intents.
+		var count int
+		require.NoError(t, db.QueryRow(ctx, "SELECT count(*) FROM images WHERE batch_id=$1", old.ID).Scan(&count))
+		require.Equal(t, 1, count)
+		require.NoError(t, db.QueryRow(ctx, "SELECT count(*) FROM outbox_messages WHERE image_id=$1", unsent.Images[0].ID).Scan(&count))
+		require.Equal(t, 1, count)
+	})
 
 	t.Run("cancel racing completion has one terminal winner", func(t *testing.T) {
 		b, err := repo.CreateBatch(ctx, newBatch())

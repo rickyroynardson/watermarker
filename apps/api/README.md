@@ -265,3 +265,73 @@ Restart API, consumer and workers, and rebuild/restart the web app.
 Workers use `GET /internal/batches/:id/cancellation` with that bearer token.
 This endpoint only returns a cancellation boolean; it grants no mutation access.
 Use HTTPS when workers connect across hosts. An absent token disables the route.
+
+## Abandoned upload cleanup
+
+S3 lifecycle rules in `scripts/localstack/uploads-lifecycle.json` expire objects
+under `uploads/` after seven days. Successful batches first copy their inputs into
+`sources/`, then normally delete staging uploads immediately. The lifecycle rule
+handles uploads never submitted, abandoned drafts, and failed staging deletions.
+Pending/retryable jobs, shared watermarks in `sources/`, and `processed/` outputs
+are outside the rule. Partially promoted orphan sources remain for a future cleanup.
+
+The retention window starts at object creation, not presign time. Expiration is
+asynchronous and day-based; seven days is eligibility, not an exact deletion
+deadline. Very old drafts may need their files uploaded again. Existing staging
+objects older than the window are also eligible when the rule is enabled.
+
+For versioned buckets, current versions expire after seven days, noncurrent
+versions are permanently removed seven days after becoming noncurrent, and
+expired delete markers are cleaned up separately. No multipart rule is needed
+for our single-request POST uploads.
+
+Fresh LocalStack initialization installs the policy automatically. To update
+an existing local bucket without resetting data, first inspect its current rules:
+
+```sh
+docker compose exec localstack awslocal s3api get-bucket-lifecycle-configuration --bucket watermarker
+docker compose exec localstack awslocal s3api put-bucket-lifecycle-configuration --bucket watermarker --lifecycle-configuration file:///etc/localstack/init/ready.d/uploads-lifecycle.json
+```
+
+A lifecycle PUT replaces the entire policy. If the bucket already has other rules,
+merge these two rules into that policy before applying. For AWS, use the same JSON
+with `aws s3api put-bucket-lifecycle-configuration --bucket "$S3_BUCKET"
+--lifecycle-configuration file://scripts/localstack/uploads-lifecycle.json`.
+Apply using provisioning credentials with `s3:PutLifecycleConfiguration`; the API
+and worker do not need new permissions. LocalStack's lifecycle scheduler behavior
+may differ from AWS; accepting the policy alone does not prove timed deletion.
+
+Reference: [AWS lifecycle expiration behavior](https://docs.aws.amazon.com/AmazonS3/latest/userguide/lifecycle-expire-general-considerations.html).
+
+## Dry-run batch retention inventory
+
+From `apps/api`:
+
+```sh
+go run ./cmd/cleanup > /tmp/watermarker-cleanup.json
+go run ./cmd/cleanup -retention-days 60 > /tmp/watermarker-cleanup-60d.json
+```
+
+The command loads `.env`, requires only `DATABASE_URL`, and prints JSON to stdout.
+It never deletes database rows or S3 objects and has no apply/delete flag.
+A database account with SELECT access is sufficient; AWS credentials are not used.
+
+The default cutoff is 30 days before the run, measured from `completed_at`
+(not submission). Only batches strictly older than the cutoff qualify.
+Pending images, retryable failures, missing completion timestamps, and unsent
+outbox intents retain the entire batch regardless of age. Old completed,
+permanently failed and cancelled batches can qualify.
+
+The report lists distinct `sources/` and `processed/` keys with referring batch
+IDs. A key is excluded if *any* batch referencing it is retained, including
+cross-role references between source images and watermarks. Shared keys appear
+once. Staging `uploads/` remains managed by the separate lifecycle policy.
+
+This is a single database snapshot for review, **not authorization for later
+deletion**. New references can appear after the query. A future deletion workflow
+must revalidate and coordinate with batch creation/retry, mark files unavailable
+in the API, and account for in-flight workers before deleting.
+No S3 listing or HEAD requests are made: listed keys may already be absent.
+Untracked objects (partial promotions or late outputs after cancellation) are
+not included. The planner scans all database references and has a one-minute
+timeout; large inventories may need pagination/index tuning before automation.

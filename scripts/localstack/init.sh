@@ -17,6 +17,10 @@ awslocal s3api create-bucket --bucket "$BUCKET" >/dev/null
 awslocal s3api put-bucket-cors --bucket "$BUCKET" \
   --cors-configuration file:///etc/localstack/init/ready.d/cors.json
 
+# Only staging uploads expire; jobs use promoted sources/ objects.
+awslocal s3api put-bucket-lifecycle-configuration --bucket "$BUCKET" \
+  --lifecycle-configuration file:///etc/localstack/init/ready.d/uploads-lifecycle.json
+
 # Both job and result failures need somewhere to land after repeated retries.
 for queue in "$JOBS" "$RESULTS"; do
   awslocal sqs create-queue --queue-name "$queue-dlq" >/dev/null
