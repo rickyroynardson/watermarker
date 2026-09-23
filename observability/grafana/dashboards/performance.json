@@ -271,6 +271,37 @@
         },
         "overrides": []
       }
+    },
+    {
+      "id": 9,
+      "title": "Cancellation API \u2014 1 blocked / 0 unblocked",
+      "type": "timeseries",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "gridPos": {
+        "x": 0,
+        "y": 32,
+        "w": 24,
+        "h": 8
+      },
+      "description": "Worker dependency state. A blocked worker retains its current job and retries API checks with its heartbeat running. No fresh telemetry is hidden, not treated as healthy. Zero means not currently blocked, not a proactive API health probe.",
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "max by (instance) (watermarker_worker_cancellation_blocked{service_name=\"watermarker-worker\",deployment_environment_name=\"development\"} and (time() - timestamp(watermarker_worker_cancellation_blocked{service_name=\"watermarker-worker\",deployment_environment_name=\"development\"}) < 90))",
+          "legendFormat": "{{instance}}"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "min": 0,
+          "noValue": "No observations"
+        },
+        "overrides": []
+      }
     }
   ]
 }

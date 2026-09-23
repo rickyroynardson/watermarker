@@ -332,3 +332,12 @@ Use the [repeatable load-test instructions](../scripts/load/README.md) to run th
 same fixtures with one and two workers and compare saved median results.
 Restart updated workers and the consumer for new metrics; the dashboard reloads
 automatically. Reports hold exact per-run outcomes; metric rates remain estimates.
+
+### Workers blocked on cancellation API
+
+The performance dashboard shows **Cancellation API — 1 blocked / 0 unblocked**
+per worker. A fresh blocked reading for two minutes triggers **Workers blocked
+on cancellation API**. Recovery clears the alert; stale telemetry (>90 seconds)
+is hidden, not replaced with a healthy zero. This is not a stopped-worker alert.
+Existing queue-backlog monitoring remains useful if workers stop exporting.
+Restart workers and Grafana to load the new metric and provisioned rule.

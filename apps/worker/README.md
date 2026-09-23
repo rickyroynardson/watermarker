@@ -120,7 +120,20 @@ cancellation migration and restart the API before starting updated workers.
 
 Each received job checks the API before S3 work and again before writing newly
 processed output. Cancelled jobs are acknowledged without publishing results.
-API/network/authentication failures leave jobs unacknowledged with normal retry
-backoff, so keep the API available while workers run. Checks are not cached.
+API/network/authentication failures pause this worker's polling and retry the
+same check with exponential jitter (1–2 seconds initially, capped at 15–30 seconds).
+The current message stays unacknowledged and its visibility heartbeat continues.
+Recovery resumes at the failed check, including before saving output; it does not
+rerun already completed image computation. SIGINT/SIGTERM interrupts the wait
+(after an in-flight HTTP timeout of up to 5 seconds), leaving the job unacknowledged.
+Unknown/malformed batch requests (HTTP 400/404) still follow normal job retry/DLQ
+handling. Checks are not cached.
+
+This reduces receive-count churn, not a guarantee against DLQ delivery: process
+restarts, failed heartbeat updates, other workers and SQS's visibility limit can
+still cause redelivery. Keep outages shorter than the queue's retention and
+visibility limits. Processing duration metrics include time spent waiting on checks.
+The gauge `watermarker_worker_cancellation_blocked` is 1 while waiting, otherwise
+0; it measures blocked workers, not proactive health checks during idle periods.
 Cancellation cannot interrupt an ongoing Pillow operation; late results remain
 blocked by the database state even if cancellation races the final worker check.

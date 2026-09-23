@@ -24,6 +24,7 @@ services:
     command: ["--config=/etc/jaeger/config.yaml"]
     volumes:
       - ./jaeger-config.yaml:/etc/jaeger/config.yaml:ro
+      - jaeger_tmp:/tmp
     depends_on:
       opensearch:
         condition: service_healthy
@@ -91,6 +92,7 @@ services:
       - tempo
 
 volumes:
+  jaeger_tmp:
   opensearch_data:
   tempo_data:
   prometheus_data:

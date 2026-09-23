@@ -13,6 +13,7 @@ from opentelemetry import metrics, trace
 from opentelemetry.context import Context
 from opentelemetry.trace.propagation.tracecontext import TraceContextTextMapPropagator
 
+from .cancellation import CancellationUnavailable
 from .messages import Job
 from .watermark import MAX_BYTES, InvalidImage, composite
 
@@ -21,6 +22,8 @@ tracer = trace.get_tracer("watermarker")
 propagator = TraceContextTextMapPropagator()
 VISIBILITY_SECONDS = 120
 HEARTBEAT_SECONDS = 40
+
+cancellation_blocked = metrics.get_meter("watermarker").create_gauge("watermarker.worker.cancellation.blocked")
 
 redeliveries = metrics.get_meter("watermarker").create_counter("watermarker.job.redeliveries")
 
@@ -32,10 +35,12 @@ job_duration = metrics.get_meter("watermarker").create_histogram(
 
 
 class Worker:
-    def __init__(self, s3, sqs, bucket: str, jobs_url: str, results_url: str, *, is_cancelled):
+    def __init__(self, s3, sqs, bucket: str, jobs_url: str, results_url: str, *, is_cancelled, stop=None):
         self.s3, self.sqs = s3, sqs
         self.bucket, self.jobs_url, self.results_url = bucket, jobs_url, results_url
         self.is_cancelled = is_cancelled
+        self.stop = stop if stop is not None else Event()
+        cancellation_blocked.set(0)
         # Cache immutable encoded watermark bytes, not mutable Pillow images (<=40 MiB).
         self.watermark = lru_cache(maxsize=4)(self.download)
 
@@ -82,6 +87,8 @@ class Worker:
         ) as span:
             try:
                 self._process(message)
+            except InterruptedError:
+                raise
             except Exception:
                 span.set_status(trace.StatusCode.ERROR, "job attempt failed")
                 log.exception("job attempt failed")
@@ -160,7 +167,26 @@ class Worker:
             job_duration.record(perf_counter() - start, {"outcome": outcome})
 
     def skip_cancelled(self, job, message):
-        if not self.is_cancelled(job.batch_id):
+        retries = 0
+        while not self.stop.is_set():
+            try:
+                cancelled = self.is_cancelled(job.batch_id)
+                cancellation_blocked.set(0)
+                break
+            except CancellationUnavailable:
+                cancellation_blocked.set(1)
+                ceiling = min(30, 2 ** min(retries + 1, 5))
+                delay = randint(max(1, ceiling // 2), ceiling)
+                retries += 1
+                log.warning("cancellation API unavailable; queue polling paused", extra={"retry_delay_seconds": delay})
+                if self.stop.wait(delay):
+                    raise InterruptedError("worker stopping during cancellation check")
+            except Exception:
+                cancellation_blocked.set(0)
+                raise
+        else:
+            raise InterruptedError("worker stopping during cancellation check")
+        if not cancelled:
             return False
         self.sqs.delete_message(QueueUrl=self.jobs_url, ReceiptHandle=message["ReceiptHandle"])
         log.info("cancelled job skipped", extra={"batch_id": job.batch_id, "image_id": job.image_id})
@@ -205,6 +231,8 @@ class Worker:
             try:
                 with self.visibility_heartbeat(message["ReceiptHandle"]):
                     self.process(message)
+            except InterruptedError:
+                return  # Shutdown leaves the message unacknowledged.
             except Exception:
                 # Stop the heartbeat before setting the retry delay so it cannot overwrite it.
                 try:
@@ -233,6 +261,7 @@ class Worker:
                 raise
 
     def run(self, stop: Event) -> None:
+        self.stop = stop
         while not stop.is_set():
             try:
                 self.poll()

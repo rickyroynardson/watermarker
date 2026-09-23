@@ -40,6 +40,7 @@ def main():
         retries={"mode": "standard", "total_max_attempts": 3},
     )
     session = boto3.Session(region_name=os.environ.get("AWS_REGION") or None)
+    stop = Event()
     worker = Worker(
         session.client(
             "s3", config=config.merge(Config(s3={"addressing_style": "path"}))
@@ -48,11 +49,11 @@ def main():
         os.environ["S3_BUCKET"],
         os.environ["SQS_JOBS_QUEUE_URL"],
         os.environ["SQS_RESULTS_QUEUE_URL"],
+        stop=stop,
         is_cancelled=partial(
             is_cancelled, os.environ["WORKER_API_URL"], os.environ["WORKER_API_TOKEN"]
         ),
     )
-    stop = Event()
     for sig in (signal.SIGINT, signal.SIGTERM):
         signal.signal(sig, lambda *_: stop.set())
     log.info("worker started")

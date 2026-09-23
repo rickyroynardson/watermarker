@@ -28,7 +28,14 @@ def inputs(missing=(), failed=(), stale=False, backlog=None, age=0, failures="0+
 def check(name, at, labels=None):
     return {'eval_time': at, 'alertname': name, 'exp_alerts': [] if labels is None else [{'exp_labels': label} for label in labels]}
 
+def worker_series(values):
+    return [{'series': 'watermarker_worker_cancellation_blocked{service_name="watermarker-worker",deployment_environment_name="development",instance="worker-test"}', 'values': values}]
+
 tests = [
+    {'name': 'worker blocked waits then alerts', 'input_series': worker_series('1+0x40'), 'alert_rule_test': [check('watermarker-cancellation', '1m'), check('watermarker-cancellation', '3m', [{'instance': 'worker-test'}])]},
+    {'name': 'worker API recovery clears alert', 'input_series': worker_series('1+0x12 0+0x28'), 'alert_rule_test': [check('watermarker-cancellation', '3m', [{'instance': 'worker-test'}]), check('watermarker-cancellation', '4m')]},
+    {'name': 'stopped worker is not fresh blocked state', 'input_series': worker_series('1+0x12'), 'alert_rule_test': [check('watermarker-cancellation', '6m')]},
+
     {'name': 'failures persist with empty DLQ', 'input_series': inputs(failures='2+0x40'), 'alert_rule_test': [check('watermarker-failures', '1m'), check('watermarker-failures', '3m', [{}]), check('watermarker-dlq', '3m')]},
     {'name': 'accepted retry clears failure alert', 'input_series': inputs(failures='1+0x12 0+0x28'), 'alert_rule_test': [check('watermarker-failures', '3m', [{}]), check('watermarker-failures', '4m')]},
     {'name': 'failed image read is unhealthy', 'input_series': inputs(failed=['failed_images'], failures='2+0x40'), 'alert_rule_test': [check('watermarker-monitor', '3m', [{}]), check('watermarker-failures', '3m')]},
