@@ -303,35 +303,61 @@ may differ from AWS; accepting the policy alone does not prove timed deletion.
 
 Reference: [AWS lifecycle expiration behavior](https://docs.aws.amazon.com/AmazonS3/latest/userguide/lifecycle-expire-general-considerations.html).
 
-## Dry-run batch retention inventory
+## Batch retention and resumable deletion
 
-From `apps/api`:
+Apply migrations and restart **all API and worker instances** before running
+cleanup with `--apply`. Older API instances do not participate in the cleanup
+lock and must not remain active. Restart the monitor and Grafana for cleanup
+metrics and alerts.
+
+From `apps/api`, preview remains the default:
 
 ```sh
-go run ./cmd/cleanup > /tmp/watermarker-cleanup.json
-go run ./cmd/cleanup -retention-days 60 > /tmp/watermarker-cleanup-60d.json
+go run ./cmd/cleanup -retention-days 30
+go run ./cmd/cleanup -apply -retention-days 30 -limit 100
 ```
 
-The command loads `.env`, requires only `DATABASE_URL`, and prints JSON to stdout.
-It never deletes database rows or S3 objects and has no apply/delete flag.
-A database account with SELECT access is sufficient; AWS credentials are not used.
+The command loads `.env` and prints JSON. Dry-run uses only database SELECT
+access; it never schedules or deletes anything. Apply requires database writes,
+`S3_BUCKET`, and S3 credentials with `s3:GetBucketVersioning` and
+`s3:DeleteObject` for `sources/*` and `processed/*`. It refuses buckets with
+enabled or suspended versioning, because ordinary deletion would leave versions
+behind rather than reclaim their storage.
 
-The default cutoff is 30 days before the run, measured from `completed_at`
-(not submission). Only batches strictly older than the cutoff qualify.
-Pending images, retryable failures, missing completion timestamps, and unsent
-outbox intents retain the entire batch regardless of age. Old completed,
-permanently failed and cancelled batches can qualify.
+Retention defaults to 30 days after `completed_at`, with a strict older-than
+cutoff. Pending images, retryable failures, and unsent outbox jobs preserve their
+entire batch. Completed, permanently failed and cancelled batches can expire.
 
-The report lists distinct `sources/` and `processed/` keys with referring batch
-IDs. A key is excluded if *any* batch referencing it is retained, including
-cross-role references between source images and watermarks. Shared keys appear
-once. Staging `uploads/` remains managed by the separate lifecycle policy.
+Each apply invocation:
+1. Rechecks current references under a database lock shared with source promotion
+   and batch creation; it never executes an old dry-run report.
+2. Marks up to `limit` eligible batches expired and schedules up to `limit` keys
+   whose references are all expired. Shared sources/watermarks remain while a
+   retained batch needs them.
+3. Attempts up to `limit` previously scheduled, due deletions. New keys wait
+   **24 hours** before deletion, allowing signed links to expire and normally
+   running workers to finish. The run itself has a one-minute timeout.
 
-This is a single database snapshot for review, **not authorization for later
-deletion**. New references can appear after the query. A future deletion workflow
-must revalidate and coordinate with batch creation/retry, mark files unavailable
-in the API, and account for in-flight workers before deleting.
-No S3 listing or HEAD requests are made: listed keys may already be absent.
-Untracked objects (partial promotions or late outputs after cancellation) are
-not included. The planner scans all database references and has a one-minute
-timeout; large inventories may need pagination/index tuning before automation.
+Expired batches remain in history, return status `expired`, and receive no new
+download/preview links. Worker cancellation checks also skip expired batches.
+Image processing history stays intact. Retired keys cannot be used in new batches,
+even after deletion; re-uploading creates fresh keys.
+
+Deletion records in `cleanup_objects` persist attempts, errors and completion.
+Failed deletes retry no sooner than five minutes later. Rerun `--apply` to resume;
+there is no automatic scheduler. S3 accepts deleting an already absent key, so
+a crash after deletion but before the database commit is safe to retry.
+The output reports scheduled, deleted and failed counts; errors also return a
+nonzero exit status. Increasing retention later does not undo already scheduled
+deletions or restore expired files.
+
+The monitor exposes durable pending, failed (a subset of pending), and deleted
+counts in Grafana. A cleanup failure lasting two minutes triggers an alert.
+Pending can include objects still in their grace period.
+
+Dry-run lists unscheduled database-tracked keys, not a verified S3 inventory.
+Missing objects, untracked partial promotions and late orphan outputs are not
+inventoried. Grace is not a distributed process fence: a suspended worker resuming
+after its final check can still leave an untracked output. No database rows,
+tombstones or staging uploads are purged by this command. The planner scans all
+references; large inventories may require pagination and indexing.

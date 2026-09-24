@@ -22,7 +22,7 @@ func NewRepository(db *pgxpool.Pool) *BatchRepository {
 
 func (r *BatchRepository) ListBatches(ctx context.Context, apiKeyID uuid.UUID, before, beforeID any, limit int) ([]ListBatchItem, error) {
 	const q = `
-		SELECT id, watermark_key, created_at, completed_at,
+		SELECT id, watermark_key, created_at, completed_at, expired_at,
  EXTRACT(EPOCH FROM (completed_at - created_at))::double precision AS duration_seconds
 		FROM batches
 		WHERE api_key_id = $1
@@ -68,12 +68,17 @@ func (r *BatchRepository) FindByIdempotencyKey(ctx context.Context, apiKeyID uui
 	return b, err == nil, err
 }
 
-func (r *BatchRepository) CreateBatch(ctx context.Context, b Batch) (Batch, error) {
+func (r *BatchRepository) CreateBatch(ctx context.Context, b Batch, promote ...func(context.Context) error) (Batch, error) {
 	tx, err := r.dbpool.Begin(ctx)
 	if err != nil {
 		return Batch{}, err
 	}
 	defer tx.Rollback(ctx)
+
+	// Shared with other creators; cleanup takes the exclusive transaction lock.
+	if _, err := tx.Exec(ctx, "SELECT pg_advisory_xact_lock_shared(823091)"); err != nil {
+		return Batch{}, err
+	}
 
 	const insertBatch = `
 		INSERT INTO batches(id, api_key_id, watermark_key, idempotency_key)
@@ -96,6 +101,23 @@ func (r *BatchRepository) CreateBatch(ctx context.Context, b Batch) (Batch, erro
 	}
 	if err != nil {
 		return Batch{}, err
+	}
+
+	keys := []string{b.WatermarkKey}
+	for _, img := range b.Images {
+		keys = append(keys, img.SourceKey)
+	}
+	var retired bool
+	if err := tx.QueryRow(ctx, "SELECT EXISTS(SELECT 1 FROM cleanup_objects WHERE key=ANY($1))", keys).Scan(&retired); err != nil {
+		return Batch{}, err
+	}
+	if retired {
+		return Batch{}, ErrUploadNotFound
+	}
+	for _, fn := range promote {
+		if err := fn(ctx); err != nil {
+			return Batch{}, err
+		}
 	}
 
 	// Insert images in a single batch using the CopyFrom API.
@@ -133,9 +155,9 @@ func (r *BatchRepository) GetBatch(ctx context.Context, owner, id uuid.UUID) (Ba
 	var b BatchDetails
 	err := r.dbpool.QueryRow(ctx, `
 		SELECT id, watermark_key, created_at, completed_at,
- EXTRACT(EPOCH FROM (completed_at - created_at))::double precision AS duration_seconds, cancelled_at FROM batches
+ EXTRACT(EPOCH FROM (completed_at - created_at))::double precision AS duration_seconds, cancelled_at, expired_at FROM batches
 		WHERE id = $1 AND api_key_id = $2
-	`, id, owner).Scan(&b.ID, &b.WatermarkKey, &b.CreatedAt, &b.CompletedAt, &b.DurationSeconds, &b.CancelledAt)
+	`, id, owner).Scan(&b.ID, &b.WatermarkKey, &b.CreatedAt, &b.CompletedAt, &b.DurationSeconds, &b.CancelledAt, &b.ExpiredAt)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return b, ErrBatchNotFound
 	}
@@ -168,7 +190,7 @@ func (r *BatchRepository) RetryImage(ctx context.Context, owner, batchID, imageI
 	defer tx.Rollback(ctx)
 	var watermark string
 	var cancelled bool
-	err = tx.QueryRow(ctx, "SELECT watermark_key, cancelled_at IS NOT NULL FROM batches WHERE id=$1 AND api_key_id=$2 FOR UPDATE", batchID, owner).Scan(&watermark, &cancelled)
+	err = tx.QueryRow(ctx, "SELECT watermark_key, (cancelled_at IS NOT NULL OR expired_at IS NOT NULL) FROM batches WHERE id=$1 AND api_key_id=$2 FOR UPDATE", batchID, owner).Scan(&watermark, &cancelled)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return ErrBatchNotFound
 	}

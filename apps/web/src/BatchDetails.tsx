@@ -108,13 +108,15 @@ export default function BatchDetails({ id, apiKey }: { id: string; apiKey: strin
         {batch ? (
           <>
             <p className="font-medium">
-              {batch.status === "pending"
-                ? "Queued / processing"
-                : batch.status === "failed"
-                  ? "Finished with errors"
-                  : batch.status === "cancelled"
-                    ? "Cancelled"
-                    : "Completed"}
+              {batch.status === "expired"
+                ? "Expired"
+                : batch.status === "pending"
+                  ? "Queued / processing"
+                  : batch.status === "failed"
+                    ? "Finished with errors"
+                    : batch.status === "cancelled"
+                      ? "Cancelled"
+                      : "Completed"}
             </p>
             <p className="text-slate-600">
               {done} of {batch.images.length} completed · {failed} failed · {cancelled} cancelled ·{" "}
@@ -137,24 +139,33 @@ export default function BatchDetails({ id, apiKey }: { id: string; apiKey: strin
           <p>{error ? "Batch details unavailable." : "Loading batch…"}</p>
         )}
       </div>
+      {batch?.expired_at && (
+        <p className="mb-4 text-sm text-slate-600">
+          Files have expired under the retention policy. Upload your files in a new batch to process
+          them again.
+        </p>
+      )}
       <ul className="grid gap-4 sm:grid-cols-2">
         {batch?.images.map((image, index) => (
           <li key={image.id} className="min-w-0 rounded-lg border border-slate-200 p-4">
             <p className="font-medium">
               Image {index + 1} ·{" "}
-              {image.status === "pending"
-                ? "Queued / processing"
-                : image.status === "done"
-                  ? "Completed"
-                  : image.status === "cancelled"
-                    ? "Cancelled"
-                    : image.retryable
-                      ? "Needs attention"
-                      : "Failed"}
+              {batch.status === "expired"
+                ? "File expired"
+                : image.status === "pending"
+                  ? "Queued / processing"
+                  : image.status === "done"
+                    ? "Completed"
+                    : image.status === "cancelled"
+                      ? "Cancelled"
+                      : image.retryable
+                        ? "Needs attention"
+                        : "Failed"}
             </p>
             <p className="mt-1 break-all font-mono text-xs text-slate-500">{image.id}</p>
             {image.error && <p className="mt-3 break-words text-sm text-red-700">{image.error}</p>}
-            {image.status === "failed" &&
+            {batch.status !== "expired" &&
+              image.status === "failed" &&
               (image.retryable ? (
                 <button
                   className="mt-3"

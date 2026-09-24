@@ -6,7 +6,7 @@ from pathlib import Path
 
 rules = json.loads((Path(__file__).parent / 'grafana/provisioning/alerting/backlog.json').read_text())['groups'][0]['rules']
 prom_rules = [{'alert': r['uid'], 'expr': '(' + r['data'][0]['model']['expr'] + ') > ' + str(r['data'][1]['model']['conditions'][0]['evaluator']['params'][0]), 'for': r['for']} for r in rules]
-sources = ['jobs', 'results', 'jobs_dlq', 'results_dlq', 'outbox', 'failed_images']
+sources = ['jobs', 'results', 'jobs_dlq', 'results_dlq', 'outbox', 'failed_images', 'cleanup']
 
 def series(source, metric, values, extra=''):
     return {'series': metric + '{service_name="watermarker-monitor",deployment_environment_name="development",instance="test",source="' + source + '"' + extra + '}', 'values': values}
@@ -17,7 +17,9 @@ def inputs(missing=(), failed=(), stale=False, backlog=None, age=0, failures="0+
         if source in missing:
             continue
         result += [series(source, 'watermarker_backlog_observation_success', '0+0x40' if source in failed else '1+0x40'), series(source, 'watermarker_backlog_observation_time_seconds', '0+0x40' if stale else '0+15x40')]
-        if source == 'failed_images':
+        if source == 'cleanup':
+            result.append(series(source, 'watermarker_cleanup_objects', '0+0x40', ',state="failed"'))
+        elif source == 'failed_images':
             result.append(series(source, 'watermarker_images_unresolved', failures))
         elif source != 'outbox':
             result.append(series(source, 'watermarker_queue_depth', (backlog or {}).get(source, '0+0x40'), ',state="visible"'))
@@ -32,14 +34,16 @@ def worker_series(values):
     return [{'series': 'watermarker_worker_cancellation_blocked{service_name="watermarker-worker",deployment_environment_name="development",instance="worker-test"}', 'values': values}]
 
 tests = [
+    {'name': 'cleanup failure alert fires', 'input_series': [series('cleanup', 'watermarker_cleanup_objects', '1+0x40', ',state="failed"'), series('cleanup', 'watermarker_backlog_observation_success', '1+0x40'), series('cleanup', 'watermarker_backlog_observation_time_seconds', '0+15x40')], 'alert_rule_test': [check('watermarker-cleanup', '1m'), check('watermarker-cleanup', '3m', [{}])]},
+
     {'name': 'worker blocked waits then alerts', 'input_series': worker_series('1+0x40'), 'alert_rule_test': [check('watermarker-cancellation', '1m'), check('watermarker-cancellation', '3m', [{'instance': 'worker-test'}])]},
     {'name': 'worker API recovery clears alert', 'input_series': worker_series('1+0x12 0+0x28'), 'alert_rule_test': [check('watermarker-cancellation', '3m', [{'instance': 'worker-test'}]), check('watermarker-cancellation', '4m')]},
     {'name': 'stopped worker is not fresh blocked state', 'input_series': worker_series('1+0x12'), 'alert_rule_test': [check('watermarker-cancellation', '6m')]},
 
     {'name': 'failures persist with empty DLQ', 'input_series': inputs(failures='2+0x40'), 'alert_rule_test': [check('watermarker-failures', '1m'), check('watermarker-failures', '3m', [{}]), check('watermarker-dlq', '3m')]},
     {'name': 'accepted retry clears failure alert', 'input_series': inputs(failures='1+0x12 0+0x28'), 'alert_rule_test': [check('watermarker-failures', '3m', [{}]), check('watermarker-failures', '4m')]},
-    {'name': 'failed image read is unhealthy', 'input_series': inputs(failed=['failed_images'], failures='2+0x40'), 'alert_rule_test': [check('watermarker-monitor', '3m', [{}]), check('watermarker-failures', '3m')]},
-    {'name': 'missing failure source is unhealthy', 'input_series': inputs(missing=['failed_images']), 'alert_rule_test': [check('watermarker-monitor', '3m', [{}])]},
+    {'name': 'failed image read is unhealthy', 'input_series': inputs(failed=['failed_images', 'cleanup'], failures='2+0x40'), 'alert_rule_test': [check('watermarker-monitor', '3m', [{}]), check('watermarker-failures', '3m')]},
+    {'name': 'missing failure source is unhealthy', 'input_series': inputs(missing=['failed_images', 'cleanup']), 'alert_rule_test': [check('watermarker-monitor', '3m', [{}])]},
 
     {'name': 'healthy empty sources', 'input_series': inputs(), 'alert_rule_test': [check(r['uid'], '6m') for r in rules]},
     {'name': 'DLQ waits then fires', 'input_series': inputs(backlog={'jobs_dlq': '1+0x40'}), 'alert_rule_test': [check('watermarker-dlq', '1m'), check('watermarker-dlq', '3m', [{'source': 'jobs_dlq'}])]},

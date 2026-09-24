@@ -1,4 +1,4 @@
-// Cleanup prints a read-only retention inventory. It never deletes data.
+// Cleanup defaults to a read-only inventory; --apply reserves and resumes deletion.
 package main
 
 import (
@@ -14,6 +14,7 @@ import (
 	"github.com/joho/godotenv"
 	"github.com/rickyroynardson/watermarker/apps/api/internal/cleanup"
 	"github.com/rickyroynardson/watermarker/apps/api/internal/database"
+	"github.com/rickyroynardson/watermarker/apps/api/internal/storage"
 )
 
 func main() {
@@ -25,7 +26,12 @@ func main() {
 
 func run() error {
 	days := flag.Int("retention-days", 30, "retain terminal batches for at least this many days")
+	apply := flag.Bool("apply", false, "expire eligible batches, schedule deletion and resume due deletes")
+	limit := flag.Int("limit", 100, "maximum batches to expire, keys to schedule and deletes to attempt (1-1000)")
 	flag.Parse()
+	if *limit < 1 || *limit > 1000 {
+		return fmt.Errorf("limit must be 1-1000")
+	}
 	if *days < 1 || *days > 36500 || flag.NArg() != 0 {
 		return fmt.Errorf("retention-days must be between 1 and 36500; no positional arguments supported")
 	}
@@ -44,6 +50,45 @@ func run() error {
 	defer db.Close()
 	now := time.Now().UTC()
 	before := now.Add(-time.Duration(*days) * 24 * time.Hour)
+	if *apply {
+		objects, err := storage.NewS3(ctx, os.Getenv("S3_BUCKET"))
+		if err != nil {
+			return err
+		}
+		if err := objects.RequireUnversioned(ctx); err != nil {
+			return err
+		}
+		scheduled, err := cleanup.Reserve(ctx, db, before, *limit)
+		if err != nil {
+			return err
+		}
+		deleted, failed := 0, 0
+		for i := 0; i < *limit && ctx.Err() == nil; i++ {
+			attempted, err := cleanup.DeleteOne(ctx, db, objects.Delete)
+			if err != nil {
+				failed++
+				fmt.Fprintln(os.Stderr, "cleanup deletion:", err)
+				if !attempted {
+					break
+				}
+			} else if attempted {
+				deleted++
+			}
+			if !attempted {
+				break
+			}
+		}
+		if err := json.NewEncoder(os.Stdout).Encode(map[string]any{"dry_run": false, "scheduled": scheduled, "deleted": deleted, "failed": failed}); err != nil {
+			return err
+		}
+		if ctx.Err() != nil {
+			return ctx.Err()
+		}
+		if failed > 0 {
+			return fmt.Errorf("%d cleanup deletions failed; progress saved for retry", failed)
+		}
+		return nil
+	}
 	candidates, err := cleanup.Plan(ctx, db, before)
 	if err != nil {
 		return err

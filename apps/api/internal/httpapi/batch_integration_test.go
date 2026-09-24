@@ -136,6 +136,7 @@ func TestBatchAPIIntegration(t *testing.T) {
 	}
 	objects, err := storage.NewS3(ctx, bucket)
 	require.NoError(t, err)
+	require.ErrorContains(t, objects.RequireUnversioned(ctx), "never enabled versioning")
 	sqsClient := sqs.NewFromConfig(aws.Config{
 		Region: "us-east-1", Credentials: credentials.NewStaticCredentialsProvider("test", "test", ""),
 	}, func(o *sqs.Options) { o.BaseEndpoint = aws.String(endpoint) })

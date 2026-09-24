@@ -32,7 +32,7 @@ type batchRepository interface {
 	RetryImage(context.Context, uuid.UUID, uuid.UUID, uuid.UUID, int) error
 	GetBatch(context.Context, uuid.UUID, uuid.UUID) (BatchDetails, error)
 	ListBatches(ctx context.Context, apiKeyID uuid.UUID, before, beforeID any, limit int) ([]ListBatchItem, error)
-	CreateBatch(ctx context.Context, b Batch) (Batch, error)
+	CreateBatch(ctx context.Context, b Batch, promote ...func(context.Context) error) (Batch, error)
 	FindByIdempotencyKey(ctx context.Context, apiKeyID uuid.UUID, key string) (Batch, bool, error)
 }
 
@@ -151,18 +151,18 @@ func (s *BatchService) CreateBatch(ctx context.Context, apiKeyID uuid.UUID, req 
 		}
 	}
 
-	// keep partial promotions for retries; add an orphan sweep if storage growth warrants it.
-	for _, upload := range uploads {
-		if err := s.objects.Promote(ctx, upload.src, upload.dst); err != nil {
-			if errors.Is(err, storage.ErrNotFound) {
-				return CreateBatchResponse{}, ErrUploadNotFound
+	// Keep promotion inside the repository's shared cleanup lock.
+	stored, err := s.repository.CreateBatch(ctx, b, func(ctx context.Context) error {
+		for _, upload := range uploads {
+			if err := s.objects.Promote(ctx, upload.src, upload.dst); err != nil {
+				if errors.Is(err, storage.ErrNotFound) {
+					return ErrUploadNotFound
+				}
+				return err
 			}
-			return CreateBatchResponse{}, err
 		}
-	}
-
-	// the unique constraint still resolves requests racing the lookup above.
-	stored, err := s.repository.CreateBatch(ctx, b)
+		return nil
+	})
 	if err != nil {
 		return CreateBatchResponse{}, err
 	}
@@ -183,6 +183,10 @@ func (s *BatchService) GetBatch(ctx context.Context, owner, id uuid.UUID) (Batch
 	b, err := s.repository.GetBatch(ctx, owner, id)
 	if err != nil {
 		return BatchDetails{}, err
+	}
+	if b.ExpiredAt != nil {
+		b.Status = "expired"
+		return b, nil // Never issue fresh signed links for expired batches.
 	}
 	b.Status = "done"
 	for i := range b.Images {

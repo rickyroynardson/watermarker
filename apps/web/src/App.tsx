@@ -227,6 +227,7 @@ export default function App() {
                   View results
                 </button>
                 <p className="break-all font-mono font-medium">{batch.id}</p>
+                {batch.expired_at && <p className="text-amber-700">Files expired</p>}
                 <p className="text-slate-500">{new Date(batch.created_at).toLocaleString()}</p>
                 <p className="break-all text-xs text-slate-500">Watermark: {batch.watermark_key}</p>
               </li>

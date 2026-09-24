@@ -243,7 +243,7 @@
               "datasourceUid": "prometheus",
               "model": {
                 "refId": "A",
-                "expr": "6 - (count(max by (source) ((watermarker_backlog_observation_success{service_name=\"watermarker-monitor\",deployment_environment_name=\"development\",source=~\"jobs|results|jobs_dlq|results_dlq|outbox|failed_images\"} == 1) and on (instance, source, deployment_environment_name) (time() - watermarker_backlog_observation_time_seconds{service_name=\"watermarker-monitor\",deployment_environment_name=\"development\",source=~\"jobs|results|jobs_dlq|results_dlq|outbox|failed_images\"} < 90))) or vector(0))",
+                "expr": "7 - (count(max by (source) ((watermarker_backlog_observation_success{service_name=\"watermarker-monitor\",deployment_environment_name=\"development\",source=~\"jobs|results|jobs_dlq|results_dlq|outbox|failed_images|cleanup\"} == 1) and on (instance, source, deployment_environment_name) (time() - watermarker_backlog_observation_time_seconds{service_name=\"watermarker-monitor\",deployment_environment_name=\"development\",source=~\"jobs|results|jobs_dlq|results_dlq|outbox|failed_images|cleanup\"} < 90))) or vector(0))",
                 "instant": true,
                 "range": false,
                 "intervalMs": 15000,
@@ -291,7 +291,7 @@
           "execErrState": "Error",
           "for": "2m",
           "annotations": {
-            "summary": "One or more of the six expected backlog sources has no fresh successful reading.",
+            "summary": "One or more of the seven expected backlog sources has no fresh successful reading.",
             "description": "Keep cmd/monitor running. Inspect its logs, AWS credentials, SQS/PostgreSQL connectivity, and OTLP export. A reading is stale after 90 seconds; this also detects a completely absent monitor.",
             "__dashboardUid__": "watermarker-queues",
             "__panelId__": "7"
@@ -443,6 +443,80 @@
             "description": "Check API availability, WORKER_API_URL and WORKER_API_TOKEN. The worker holds its current job and pauses queue polling while retrying checks.",
             "__dashboardUid__": "watermarker-performance",
             "__panelId__": "9"
+          },
+          "labels": {
+            "project": "watermarker",
+            "environment": "development",
+            "severity": "warning"
+          },
+          "isPaused": false
+        },
+        {
+          "uid": "watermarker-cleanup",
+          "title": "Storage cleanup deletions failing",
+          "condition": "B",
+          "data": [
+            {
+              "refId": "A",
+              "relativeTimeRange": {
+                "from": 600,
+                "to": 0
+              },
+              "datasourceUid": "prometheus",
+              "model": {
+                "refId": "A",
+                "expr": "max (max by (state) (watermarker_cleanup_objects{state=\"failed\",service_name=\"watermarker-monitor\",deployment_environment_name=\"development\"} and on(instance,source,deployment_environment_name) ((watermarker_backlog_observation_success{source=\"cleanup\"} == 1) and on(instance,source,deployment_environment_name) (time()-watermarker_backlog_observation_time_seconds{source=\"cleanup\"} < 90))))",
+                "instant": true,
+                "range": false,
+                "intervalMs": 15000,
+                "maxDataPoints": 43200
+              }
+            },
+            {
+              "refId": "B",
+              "relativeTimeRange": {
+                "from": 0,
+                "to": 0
+              },
+              "datasourceUid": "__expr__",
+              "model": {
+                "refId": "B",
+                "type": "threshold",
+                "expression": "A",
+                "conditions": [
+                  {
+                    "type": "query",
+                    "evaluator": {
+                      "type": "gt",
+                      "params": [
+                        0
+                      ]
+                    },
+                    "operator": {
+                      "type": "and"
+                    },
+                    "reducer": {
+                      "type": "last",
+                      "params": []
+                    },
+                    "query": {
+                      "params": [
+                        "B"
+                      ]
+                    }
+                  }
+                ]
+              }
+            }
+          ],
+          "noDataState": "OK",
+          "execErrState": "Error",
+          "for": "2m",
+          "annotations": {
+            "summary": "S3 cleanup deletes need retry.",
+            "description": "Inspect cleanup command errors, fix S3 access, and rerun cleanup --apply. Failed keys stay pending in PostgreSQL.",
+            "__dashboardUid__": "watermarker-queues",
+            "__panelId__": "12"
           },
           "labels": {
             "project": "watermarker",

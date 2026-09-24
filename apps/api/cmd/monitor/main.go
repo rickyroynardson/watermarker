@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/joho/godotenv"
+	"github.com/rickyroynardson/watermarker/apps/api/internal/cleanup"
 	"github.com/rickyroynardson/watermarker/apps/api/internal/database"
 	"github.com/rickyroynardson/watermarker/apps/api/internal/image"
 	"github.com/rickyroynardson/watermarker/apps/api/internal/logger"
@@ -86,6 +87,15 @@ func main() {
 			log.Warn("observe unresolved failures", zap.Error(err))
 		} else {
 			metrics.UnresolvedFailures(ctx, failures)
+		}
+		pollCtx, cancel = context.WithTimeout(ctx, 3*time.Second)
+		counts, err := cleanup.Counts(pollCtx, db)
+		cancel()
+		metrics.BacklogObservation(ctx, "cleanup", err)
+		if err != nil {
+			log.Warn("observe cleanup", zap.Error(err))
+		} else {
+			metrics.CleanupObjects(ctx, counts)
 		}
 		select {
 		case <-ctx.Done():

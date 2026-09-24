@@ -83,7 +83,7 @@ func NewRouter(dbpool *pgxpool.Pool, s3Storage *storage.S3) http.Handler {
 			return
 		}
 		var cancelled bool
-		err = dbpool.QueryRow(c.Request.Context(), "SELECT cancelled_at IS NOT NULL FROM batches WHERE id=$1", id).Scan(&cancelled)
+		err = dbpool.QueryRow(c.Request.Context(), "SELECT (cancelled_at IS NOT NULL OR expired_at IS NOT NULL) FROM batches WHERE id=$1", id).Scan(&cancelled)
 		if errors.Is(err, pgx.ErrNoRows) {
 			c.AbortWithStatus(404)
 			return

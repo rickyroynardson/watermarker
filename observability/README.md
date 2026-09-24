@@ -275,7 +275,7 @@ They evaluate every 20 seconds and link back to the queue dashboard.
 | Persistent queue backlog | Jobs or results queue has more than 0 messages, including in-flight/delayed | 5 minutes |
 | Outbox dispatch delayed | Oldest pending intent is older than 120 seconds | 2 minutes |
 | Images need attention | Failed, retryable images in PostgreSQL exceed 0 | 2 minutes |
-| Backlog monitoring unhealthy | Any of jobs, results, both DLQs, outbox, or failed images lacks a successful reading less than 90 seconds old | 2 minutes |
+| Backlog monitoring unhealthy | Any of jobs, results, both DLQs, outbox, failed images, or cleanup lacks a successful reading less than 90 seconds old | 2 minutes |
 
 These are development thresholds, scoped to `deployment.environment.name=development`
 and `service.name=watermarker-monitor`. Continuous healthy traffic can keep a queue
@@ -321,7 +321,7 @@ processing succeeded. The jobs/results DLQ panels remain unchanged.
 
 The alert uses fresh successful observations and takes the maximum across
 monitor replicas to avoid double-counting. Missing or failed database reads
-are covered by the six-source monitor-health alert. No database migration
+are covered by the seven-source monitor-health alert. No database migration
 beyond the existing image-retry migration is needed.
 
 ## Worker performance comparison
@@ -341,3 +341,12 @@ on cancellation API**. Recovery clears the alert; stale telemetry (>90 seconds)
 is hidden, not replaced with a healthy zero. This is not a stopped-worker alert.
 Existing queue-backlog monitoring remains useful if workers stop exporting.
 Restart workers and Grafana to load the new metric and provisioned rule.
+
+
+### Storage cleanup
+
+The queue dashboard's **Cleanup objects — pending / failed / deleted** panel reads
+durable deletion records via the monitor. Failed objects are included in pending;
+deleted is cumulative. **Storage cleanup deletions failing** fires after two
+minutes. Inspect command errors and rerun `cleanup --apply` after fixing access.
+Restart the monitor and Grafana after applying the cleanup migration.

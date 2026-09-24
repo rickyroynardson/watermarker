@@ -50,6 +50,113 @@ func testPipeline(t *testing.T, ctx context.Context, originalDB *pgxpool.Pool, s
 		return count
 	}
 
+	t.Run("cleanup reserves live references and resumes failed deletes", func(t *testing.T) {
+		old, err := repo.CreateBatch(ctx, newBatch())
+		require.NoError(t, err)
+		keys := []string{old.WatermarkKey, old.Images[0].SourceKey}
+		t.Cleanup(func() {
+			db.Exec(ctx, "DELETE FROM cleanup_objects WHERE key=ANY($1)", keys)
+			db.Exec(ctx, "DELETE FROM batches WHERE id=$1", old.ID)
+		})
+		_, err = db.Exec(ctx, "DELETE FROM outbox_messages WHERE image_id=$1", old.Images[0].ID)
+		require.NoError(t, err)
+		_, err = db.Exec(ctx, "UPDATE images SET status='cancelled' WHERE batch_id=$1", old.ID)
+		require.NoError(t, err)
+		_, err = db.Exec(ctx, "UPDATE batches SET completed_at=now()-interval '40 days',cancelled_at=now()-interval '40 days' WHERE id=$1", old.ID)
+		require.NoError(t, err)
+		cutoff := time.Now().Add(-30 * 24 * time.Hour)
+		n, err := cleanup.Reserve(ctx, db, cutoff, 1)
+		require.NoError(t, err)
+		require.Equal(t, 1, n)
+		details, err := repo.GetBatch(ctx, owner, old.ID)
+		require.NoError(t, err)
+		require.NotNil(t, details.ExpiredAt)
+		require.ErrorIs(t, repo.RetryImage(ctx, owner, old.ID, old.Images[0].ID, 0), batch.ErrRetryConflict)
+		_, err = cleanup.Reserve(ctx, db, cutoff, 10)
+		require.NoError(t, err)
+		called := false
+		attempted, err := cleanup.DeleteOne(ctx, db, func(context.Context, string) error { called = true; return nil })
+		require.NoError(t, err)
+		require.False(t, attempted)
+		require.False(t, called, "grace period must prevent early deletion")
+		replacement := newBatch()
+		replacement.WatermarkKey = old.WatermarkKey
+		_, err = repo.CreateBatch(ctx, replacement, func(context.Context) error { t.Fatal("retired key must be rejected before S3 promotion"); return nil })
+		require.ErrorIs(t, err, batch.ErrUploadNotFound)
+		_, err = db.Exec(ctx, "UPDATE cleanup_objects SET delete_after=now()-interval '1 second' WHERE key=ANY($1)", keys)
+		require.NoError(t, err)
+		failure := errors.New("S3 unavailable")
+		attempted, err = cleanup.DeleteOne(ctx, db, func(context.Context, string) error { return failure })
+		require.True(t, attempted)
+		require.ErrorIs(t, err, failure)
+		counts, err := cleanup.Counts(ctx, db)
+		require.NoError(t, err)
+		require.Equal(t, [3]int64{2, 1, 0}, counts)
+		_, err = db.Exec(ctx, "UPDATE cleanup_objects SET next_attempt_at=now()-interval '1 second' WHERE key=ANY($1)", keys)
+		require.NoError(t, err)
+		crashCtx, stopDelete := context.WithCancel(ctx)
+		attempted, err = cleanup.DeleteOne(crashCtx, db, func(context.Context, string) error {
+			stopDelete() // S3 accepted; committing the completion record now fails.
+			return nil
+		})
+		stopDelete()
+		require.True(t, attempted)
+		require.Error(t, err)
+		for range 2 {
+			attempted, err = cleanup.DeleteOne(ctx, db, func(_ context.Context, key string) error { require.Contains(t, keys, key); return nil })
+			require.True(t, attempted)
+			require.NoError(t, err)
+		}
+		counts, err = cleanup.Counts(ctx, db)
+		require.NoError(t, err)
+		require.Equal(t, [3]int64{0, 0, 2}, counts)
+		attempted, err = cleanup.DeleteOne(ctx, db, func(context.Context, string) error { t.Fatal("completed deletion must not rerun"); return nil })
+		require.NoError(t, err)
+		require.False(t, attempted)
+		n, err = cleanup.Reserve(ctx, db, cutoff, 10)
+		require.NoError(t, err)
+		require.Zero(t, n)
+	})
+
+	t.Run("cleanup waits for in-flight source promotion", func(t *testing.T) {
+		old, err := repo.CreateBatch(ctx, newBatch())
+		require.NoError(t, err)
+		t.Cleanup(func() {
+			db.Exec(ctx, "DELETE FROM cleanup_objects WHERE key=$1 OR key=$2", old.WatermarkKey, old.Images[0].SourceKey)
+			db.Exec(ctx, "DELETE FROM batches WHERE id=$1", old.ID)
+		})
+		_, err = db.Exec(ctx, "DELETE FROM outbox_messages WHERE image_id=$1", old.Images[0].ID)
+		require.NoError(t, err)
+		_, err = db.Exec(ctx, "UPDATE images SET status='cancelled' WHERE batch_id=$1", old.ID)
+		require.NoError(t, err)
+		_, err = db.Exec(ctx, "UPDATE batches SET completed_at=now()-interval '40 days' WHERE id=$1", old.ID)
+		require.NoError(t, err)
+		newer := newBatch()
+		newer.WatermarkKey = old.Images[0].SourceKey
+		t.Cleanup(func() { db.Exec(ctx, "DELETE FROM batches WHERE id=$1", newer.ID) })
+		entered, release := make(chan struct{}), make(chan struct{})
+		var once sync.Once
+		defer once.Do(func() { close(release) })
+		created, cleaned := make(chan error, 1), make(chan error, 1)
+		go func() {
+			_, err := repo.CreateBatch(ctx, newer, func(context.Context) error { close(entered); <-release; return nil })
+			created <- err
+		}()
+		<-entered
+		go func() { _, err := cleanup.Reserve(ctx, db, time.Now().Add(-30*24*time.Hour), 10); cleaned <- err }()
+		select {
+		case err := <-cleaned:
+			t.Fatalf("cleanup passed active promotion: %v", err)
+		case <-time.After(100 * time.Millisecond):
+		}
+		once.Do(func() { close(release) })
+		require.NoError(t, <-created)
+		require.NoError(t, <-cleaned)
+		var retired bool
+		require.NoError(t, db.QueryRow(ctx, "SELECT EXISTS(SELECT 1 FROM cleanup_objects WHERE key=$1)", old.Images[0].SourceKey).Scan(&retired))
+		require.False(t, retired)
+	})
+
 	t.Run("cleanup preserves shared references and unfinished work", func(t *testing.T) {
 		cutoff := time.Now().UTC().Truncate(time.Microsecond).Add(-30 * 24 * time.Hour)
 		makeBatch := func(age time.Duration, status string, retryable, outboxPending bool) batch.Batch {

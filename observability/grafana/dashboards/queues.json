@@ -389,6 +389,38 @@
         },
         "overrides": []
       }
+    },
+    {
+      "id": 12,
+      "title": "Cleanup objects \u2014 pending / failed / deleted",
+      "type": "timeseries",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "gridPos": {
+        "x": 0,
+        "y": 54,
+        "w": 24,
+        "h": 8
+      },
+      "description": "Durable deletion records. Pending includes grace-period objects; failed is a subset of pending. Deleted is cumulative. Run cleanup --apply again to resume due work.",
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "max by (state) (watermarker_cleanup_objects{service_name=\"watermarker-monitor\",deployment_environment_name=\"development\"} and on(instance,source,deployment_environment_name) ((watermarker_backlog_observation_success{source=\"cleanup\"} == 1) and on(instance,source,deployment_environment_name) (time()-watermarker_backlog_observation_time_seconds{source=\"cleanup\"} < 90)))",
+          "legendFormat": "{{state}}"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "min": 0,
+          "noValue": "No fresh data",
+          "decimals": 0
+        },
+        "overrides": []
+      }
     }
   ]
 }

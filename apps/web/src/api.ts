@@ -2,12 +2,13 @@ export type Batch = {
   id: string;
   watermark_key: string;
   created_at: string;
+  expired_at?: string | null;
   completed_at?: string | null;
   duration_seconds?: number | null;
 };
 export type BatchPage = { batches: Batch[] | null; next_cursor: string | null };
 export type BatchDetails = Batch & {
-  status: "pending" | "done" | "failed" | "cancelled";
+  status: "pending" | "done" | "failed" | "cancelled" | "expired";
   images: {
     id: string;
     source_key: string;

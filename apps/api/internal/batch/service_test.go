@@ -5,6 +5,7 @@ import (
 	"errors"
 	"slices"
 	"testing"
+	"time"
 
 	"github.com/google/uuid"
 	"github.com/stretchr/testify/require"
@@ -32,7 +33,12 @@ func (r *failingRepo) FindByIdempotencyKey(context.Context, uuid.UUID, string) (
 	return r.stored, r.stored.ID != uuid.Nil, r.lookupErr
 }
 
-func (r *failingRepo) CreateBatch(_ context.Context, b Batch) (Batch, error) {
+func (r *failingRepo) CreateBatch(ctx context.Context, b Batch, promote ...func(context.Context) error) (Batch, error) {
+	for _, fn := range promote {
+		if err := fn(ctx); err != nil {
+			return Batch{}, err
+		}
+	}
 	if r.createErr != nil {
 		return Batch{}, r.createErr
 	}
@@ -160,4 +166,15 @@ func TestGetBatch(t *testing.T) {
 	store.signErr = errors.New("signing unavailable")
 	_, err = NewService(repo, store).GetBatch(t.Context(), uuid.New(), uuid.New())
 	require.ErrorIs(t, err, store.signErr)
+}
+
+func TestExpiredBatchDoesNotSignOutputs(t *testing.T) {
+	now := time.Now()
+	repo := &failingRepo{details: BatchDetails{ExpiredAt: &now, Images: []ImageDetails{{Status: "done", OutputKey: "processed/output"}}}}
+	objects := &failingStore{signErr: errors.New("should not sign")}
+	details, err := NewService(repo, objects).GetBatch(t.Context(), uuid.New(), uuid.New())
+	require.NoError(t, err)
+	require.Equal(t, "expired", details.Status)
+	require.Empty(t, details.Images[0].DownloadURL)
+	require.Empty(t, objects.signed)
 }

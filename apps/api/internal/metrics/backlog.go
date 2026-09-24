@@ -42,3 +42,11 @@ var unresolvedFailures, _ = meter.Int64Gauge("watermarker.images.unresolved")
 func UnresolvedFailures(ctx context.Context, count int64) {
 	unresolvedFailures.Record(ctx, count, metric.WithAttributes(attribute.String("source", "failed_images")))
 }
+
+var cleanupObjects, _ = meter.Int64Gauge("watermarker.cleanup.objects")
+
+func CleanupObjects(ctx context.Context, counts [3]int64) {
+	for i, state := range []string{"pending", "failed", "deleted"} {
+		cleanupObjects.Record(ctx, counts[i], metric.WithAttributes(attribute.String("source", "cleanup"), attribute.String("state", state)))
+	}
+}

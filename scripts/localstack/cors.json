@@ -4,5 +4,11 @@
     "AllowedMethods": ["POST"],
     "AllowedHeaders": ["*"],
     "MaxAgeSeconds": 3600
+  }, {
+    "AllowedOrigins": ["https://app.localstack.cloud"],
+    "AllowedMethods": ["GET", "HEAD"],
+    "AllowedHeaders": ["*"],
+    "ExposeHeaders": ["ETag", "x-amz-request-id"],
+    "MaxAgeSeconds": 3600
   }]
 }

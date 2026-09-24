@@ -14,13 +14,11 @@ type Candidate struct {
 	BatchIDs []uuid.UUID `json:"batch_ids"`
 }
 
-// Plan is a single SELECT snapshot, not a deletion authorization.
-// ponytail: scan all references for this dry-run; paginate if inventory size warrants it.
-func Plan(ctx context.Context, db *pgxpool.Pool, before time.Time) ([]Candidate, error) {
-	rows, err := db.Query(ctx, `
+const candidateQuery = `
  WITH eligible AS (
    SELECT b.id FROM batches b
-   WHERE b.completed_at < $1
+   WHERE (b.completed_at < $1 OR b.expired_at IS NOT NULL)
+     AND (NOT $2::boolean OR b.expired_at IS NOT NULL)
      AND NOT EXISTS (SELECT 1 FROM images i WHERE i.batch_id=b.id AND (i.status='pending' OR i.retryable))
      AND NOT EXISTS (SELECT 1 FROM images i JOIN outbox_messages o ON o.image_id=i.id WHERE i.batch_id=b.id)
  ), refs AS (
@@ -33,10 +31,14 @@ func Plan(ctx context.Context, db *pgxpool.Pool, before time.Time) ([]Candidate,
  SELECT r.key, array_agg(DISTINCT r.batch_id ORDER BY r.batch_id) AS batch_ids
  FROM refs r
  WHERE (r.key LIKE 'sources/%' OR r.key LIKE 'processed/%')
+ AND NOT EXISTS (SELECT 1 FROM cleanup_objects c WHERE c.key=r.key)
  GROUP BY r.key
  HAVING bool_and(r.batch_id IN (SELECT id FROM eligible))
- ORDER BY r.key
- `, before)
+ ORDER BY r.key LIMIT $3`
+
+// Plan lists keys not yet scheduled. Existing cleanup records remain resumable.
+func Plan(ctx context.Context, db *pgxpool.Pool, before time.Time) ([]Candidate, error) {
+	rows, err := db.Query(ctx, candidateQuery, before, false, nil)
 	if err != nil {
 		return nil, err
 	}

@@ -130,3 +130,15 @@ func (s *S3) PresignOutput(ctx context.Context, key string, download bool) (stri
 	}
 	return res.URL, nil
 }
+
+// RequireUnversioned prevents reporting a delete marker as reclaimed storage.
+func (s *S3) RequireUnversioned(ctx context.Context) error {
+	versioning, err := s.client.GetBucketVersioning(ctx, &s3.GetBucketVersioningInput{Bucket: aws.String(s.bucket)})
+	if err != nil {
+		return err
+	}
+	if versioning.Status != "" {
+		return errors.New("cleanup apply requires a bucket that has never enabled versioning")
+	}
+	return nil
+}
