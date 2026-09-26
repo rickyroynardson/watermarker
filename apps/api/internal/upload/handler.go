@@ -38,7 +38,7 @@ func (h *UploadHandler) Presign(c *gin.Context) {
 		return
 	}
 
-	key := fmt.Sprintf("uploads/%s/%s", auth.APIKeyID(c).String(), uuid.NewString())
+	key := fmt.Sprintf("uploads/%s/%s", auth.UserID(c).String(), uuid.NewString())
 
 	res, err := h.s3.PresignUpload(c.Request.Context(), key, req.ContentType)
 	if err != nil {

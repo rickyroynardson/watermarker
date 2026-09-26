@@ -32,6 +32,66 @@ use the same policy in AWS. The consumer retains invalid messages and failed
 handler attempts for retry,
 so monitor and redrive the results DLQ after fixing the cause.
 
+## Browser sign-in and ownership
+
+Apply migrations before starting the updated API/consumer/monitor. Stop the old
+API during this migration: `batches.api_key_id` becomes `batches.user_id`.
+Back up your database first; the ownership migration deliberately refuses a
+lossy down migration once accounts can have multiple keys.
+
+Set these values in `apps/api/.env` (the API loads that file when run there):
+
+```dotenv
+APP_ORIGIN=http://localhost:5173
+OIDC_ISSUER_URL=https://your-provider.example/your-issuer
+OIDC_CLIENT_ID=your-client-id
+OIDC_CLIENT_SECRET=your-client-secret
+```
+
+Register an OIDC web application with Authorization Code + PKCE (S256), the
+`openid profile` scopes, and the exact callback
+`http://localhost:5173/api/auth/callback`. The frontend's existing `/api` proxy
+forwards the callback to the API. Use the same origin consistently; `localhost`
+and `127.0.0.1` are different origins. A public PKCE client can omit the secret
+if the provider supports it. HTTPS is required outside loopback development.
+In deployment, serve `/api` and the frontend from the same origin.
+
+Leave all four settings empty to keep API-key-only operation. Partial or invalid
+settings fail API startup. Credentials and provider tokens remain server-side;
+the frontend has no client secret or tokens in local storage. The backend
+verifies signature, issuer, audience, expiration, nonce and nonempty subject,
+uses one-time state bound to the browser and PKCE, then issues an opaque
+HttpOnly, SameSite=Lax cookie (Secure for HTTPS). Sessions expire after eight
+hours and are stored hashed in PostgreSQL. Logout revokes the local session;
+it does not sign out of the identity provider. Cookie-authenticated writes must
+carry an Origin matching `APP_ORIGIN`; API-key clients use bearer authentication.
+
+The Account panel offers sign-in/sign-out and creating/revoking keys for scripts.
+Keys are shown once, stored hashed, and share their user's batch and upload
+ownership. Revoking a key does not delete batches or end browser sessions.
+Explicit bearer credentials take precedence over cookies; an invalid key never
+falls back to a signed-in browser session.
+
+Existing keys migrate to separate legacy users with the same UUID as their old
+key ID, preserving batches, idempotency scope and S3 paths. New OIDC accounts
+are identified by `(issuer, subject)`, never display name or email. Legacy data
+is **not automatically attached** to a new sign-in; keep using its existing key.
+An explicit verified account-linking flow is deferred. New keys for an OIDC user
+share ownership, so rotation does not move data. Do not run old manual key-seeding
+SQL without providing `user_id`; it is now required.
+
+Routes: `GET /auth/config`, `GET /auth/login`, `GET /auth/callback`,
+`GET /auth/me`, `POST /auth/logout`, and `GET/POST /auth/keys`,
+`DELETE /auth/keys/:id`. Key management requires a browser session. Auth responses
+are not cached, and access logs record route templates, never callback query
+strings. Expired sessions/login attempts are purged when starting another login;
+expiry checks reject them regardless of whether purging has run.
+
+Tests use a local fake provider with a real signing key and JWKS endpoint; no
+external provider account is needed to run the integration suite. The security
+checks cover invalid tokens, callback replay, cross-site writes, session expiry,
+logout, key revocation, shared ownership across keys, and cross-user denial.
+
 ## Presign uploads
 
 `POST /uploads/presign`, authenticated with `Authorization: Bearer <api-key>`:
@@ -44,7 +104,7 @@ so monitor and redrive the results DLQ after fixing the cause.
 
 Accepts one file per request: JPEG, PNG, or WebP. Each policy
 allows 1 byte to 10 MiB and expires after 900 seconds (or sooner if the signing
-credentials expire). Keys are generated as `uploads/<api-key-id>/<uuid>`.
+credentials expire). Keys are generated as `uploads/<user-id>/<uuid>`.
 
 The response is `{ "data": <upload> }`. The upload contains `key`, `url`, `fields`, and
 `expires_in` (seconds). POST multipart form data to `url`, copying **all** returned
@@ -66,7 +126,7 @@ endpoint in `AWS_ENDPOINT_URL` must be reachable by the uploading client.
 Request a presign and upload each file independently, including the watermark.
 After uploads succeed, use the returned keys as `watermark_key` and `source_keys`
 in `POST /batches`. The API copies each object from
-`uploads/<api-key-id>/<uuid>` to `sources/<api-key-id>/<uuid>`, and stores the
+`uploads/<user-id>/<uuid>` to `sources/<user-id>/<uuid>`, and stores the
 persistent keys. A [conditional copy](https://docs.aws.amazon.com/AmazonS3/latest/API/API_CopyObject.html)
 preserves the first promoted version, even if the upload URL is reused or batches
 are submitted concurrently. Request a new upload key to change an image.
@@ -85,8 +145,8 @@ The background dispatcher sends each stored JSON message to the jobs queue:
   "job_type": "composite",
   "batch_id": "<batch-uuid>",
   "image_id": "<image-uuid>",
-  "source_key": "sources/<api-key-id>/<upload-uuid>",
-  "watermark_key": "sources/<api-key-id>/<watermark-uuid>"
+  "source_key": "sources/<user-id>/<upload-uuid>",
+  "watermark_key": "sources/<user-id>/<watermark-uuid>"
 }
 ```
 

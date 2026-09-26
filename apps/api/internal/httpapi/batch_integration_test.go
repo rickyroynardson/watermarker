@@ -97,7 +97,14 @@ func TestBatchAPIIntegration(t *testing.T) {
 	paths, err := filepath.Glob("../../migrations/*.sql")
 	require.NoError(t, err)
 	require.NotEmpty(t, paths)
+	legacyOwner, legacyBatch := uuid.New(), uuid.New()
 	for _, path := range paths {
+		if strings.HasSuffix(path, "20260924000000_add_user_auth.sql") {
+			_, err := db.Exec(ctx, "INSERT INTO api_keys(id,name,key_hash) VALUES($1,'legacy',encode(sha256('legacy-test-key'::bytea),'hex'))", legacyOwner)
+			require.NoError(t, err)
+			_, err = db.Exec(ctx, "INSERT INTO batches(id,api_key_id,watermark_key) VALUES($1,$2,$3)", legacyBatch, legacyOwner, "sources/"+legacyOwner.String()+"/"+uuid.NewString())
+			require.NoError(t, err)
+		}
 		sql, err := os.ReadFile(path)
 		require.NoError(t, err)
 		up, _, _ := strings.Cut(string(sql), "-- +goose Down")
@@ -159,13 +166,26 @@ func TestBatchAPIIntegration(t *testing.T) {
 		router.ServeHTTP(w, r)
 		return w
 	}
+	t.Run("legacy ownership migration", func(t *testing.T) {
+		w := request(http.MethodGet, "/batches/"+legacyBatch.String(), "legacy-test-key", "", "")
+		require.Equal(t, 200, w.Code, w.Body.String())
+		require.Contains(t, w.Body.String(), "sources/"+legacyOwner.String()+"/")
+		var keyOwner uuid.UUID
+		require.NoError(t, db.QueryRow(ctx, "SELECT user_id FROM api_keys WHERE id=$1", legacyOwner).Scan(&keyOwner))
+		require.Equal(t, legacyOwner, keyOwner)
+		_, err := db.Exec(ctx, "DELETE FROM batches WHERE id=$1", legacyBatch)
+		require.NoError(t, err)
+	})
 	seedKey := func() (uuid.UUID, string) {
 		id, token := uuid.New(), uuid.NewString()
 		hash := sha256.Sum256([]byte(token))
-		_, err := db.Exec(ctx, "INSERT INTO api_keys(id, name, key_hash) VALUES ($1, 'test', $2)", id, hex.EncodeToString(hash[:]))
+		_, err := db.Exec(ctx, "INSERT INTO users(id,name) VALUES($1,'test')", id)
+		require.NoError(t, err)
+		_, err = db.Exec(ctx, "INSERT INTO api_keys(id, user_id, name, key_hash) VALUES ($1, $1, 'test', $2)", id, hex.EncodeToString(hash[:]))
 		require.NoError(t, err)
 		return id, token
 	}
+	t.Run("OIDC sign-in and user ownership", func(t *testing.T) { testOIDC(t, db, objects) })
 	owner, token := seedKey()
 	_, otherToken := seedKey()
 	revokedID, revokedToken := seedKey()
@@ -208,11 +228,11 @@ func TestBatchAPIIntegration(t *testing.T) {
 	counts := func(t *testing.T, idem string, batches, images int) {
 		t.Helper()
 		var gotBatches, gotImages, gotJobs int
-		require.NoError(t, db.QueryRow(ctx, "SELECT count(*) FROM batches WHERE api_key_id = $1 AND idempotency_key = $2", owner, idem).Scan(&gotBatches))
-		require.NoError(t, db.QueryRow(ctx, "SELECT count(*) FROM images JOIN batches ON batches.id = images.batch_id WHERE api_key_id = $1 AND idempotency_key = $2", owner, idem).Scan(&gotImages))
+		require.NoError(t, db.QueryRow(ctx, "SELECT count(*) FROM batches WHERE user_id = $1 AND idempotency_key = $2", owner, idem).Scan(&gotBatches))
+		require.NoError(t, db.QueryRow(ctx, "SELECT count(*) FROM images JOIN batches ON batches.id = images.batch_id WHERE user_id = $1 AND idempotency_key = $2", owner, idem).Scan(&gotImages))
 		require.Equal(t, batches, gotBatches)
 		require.Equal(t, images, gotImages)
-		require.NoError(t, db.QueryRow(ctx, "SELECT count(*) FROM outbox_messages o JOIN images i ON i.id = o.image_id JOIN batches b ON b.id = i.batch_id WHERE b.api_key_id = $1 AND b.idempotency_key = $2", owner, idem).Scan(&gotJobs))
+		require.NoError(t, db.QueryRow(ctx, "SELECT count(*) FROM outbox_messages o JOIN images i ON i.id = o.image_id JOIN batches b ON b.id = i.batch_id WHERE b.user_id = $1 AND b.idempotency_key = $2", owner, idem).Scan(&gotJobs))
 		require.Equal(t, images, gotJobs)
 	}
 
@@ -227,7 +247,7 @@ func TestBatchAPIIntegration(t *testing.T) {
 
 	t.Run("cancel endpoint and worker read authentication", func(t *testing.T) {
 		t.Setenv("WORKER_API_TOKEN", "test-worker-token")
-		b := batch.Batch{ID: uuid.New(), APIKeyID: owner, WatermarkKey: "sources/mark", Images: []batch.Image{{ID: uuid.New(), SourceKey: "sources/img"}}}
+		b := batch.Batch{ID: uuid.New(), UserID: owner, WatermarkKey: "sources/mark", Images: []batch.Image{{ID: uuid.New(), SourceKey: "sources/img"}}}
 		repo := batch.NewRepository(db)
 		_, err := repo.CreateBatch(ctx, b)
 		require.NoError(t, err)
@@ -247,7 +267,7 @@ func TestBatchAPIIntegration(t *testing.T) {
 
 	t.Run("retry endpoint authorization and validation", func(t *testing.T) {
 		id, imageID := uuid.New(), uuid.New()
-		_, err := db.Exec(ctx, "INSERT INTO batches(id,api_key_id,watermark_key) VALUES($1,$2,'sources/mark')", id, owner)
+		_, err := db.Exec(ctx, "INSERT INTO batches(id,user_id,watermark_key) VALUES($1,$2,'sources/mark')", id, owner)
 		require.NoError(t, err)
 		_, err = db.Exec(ctx, "INSERT INTO images(id,batch_id,source_key,status,error,retryable) VALUES($1,$2,'sources/image','failed','exhausted',true)", imageID, id)
 		require.NoError(t, err)
@@ -268,7 +288,7 @@ func TestBatchAPIIntegration(t *testing.T) {
 		owner, token := seedKey()
 		id := uuid.New()
 		imageIDs := []uuid.UUID{uuid.New(), uuid.New(), uuid.New()}
-		_, err := db.Exec(ctx, "INSERT INTO batches (id, api_key_id, watermark_key) VALUES ($1, $2, 'sources/mark')", id, owner)
+		_, err := db.Exec(ctx, "INSERT INTO batches (id, user_id, watermark_key) VALUES ($1, $2, 'sources/mark')", id, owner)
 		require.NoError(t, err)
 		for _, imageID := range imageIDs {
 			_, err := db.Exec(ctx, "INSERT INTO images (id, batch_id, source_key) VALUES ($1, $2, $3)", imageID, id, "sources/"+imageID.String())
@@ -350,7 +370,7 @@ func TestBatchAPIIntegration(t *testing.T) {
 		counts(t, "create", 1, 2)
 		var storedOwner uuid.UUID
 		var storedWatermark string
-		require.NoError(t, db.QueryRow(ctx, "SELECT api_key_id, watermark_key FROM batches WHERE id = $1", id).Scan(&storedOwner, &storedWatermark))
+		require.NoError(t, db.QueryRow(ctx, "SELECT user_id, watermark_key FROM batches WHERE id = $1", id).Scan(&storedOwner, &storedWatermark))
 		require.Equal(t, owner, storedOwner)
 		require.Equal(t, strings.Replace(watermark.Key, "uploads/", "sources/", 1), storedWatermark)
 		for key, want := range map[string]string{watermark.Key: "watermark", first.Key: "first image", second.Key: "second image"} {

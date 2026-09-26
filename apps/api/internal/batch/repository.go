@@ -20,18 +20,18 @@ func NewRepository(db *pgxpool.Pool) *BatchRepository {
 	}
 }
 
-func (r *BatchRepository) ListBatches(ctx context.Context, apiKeyID uuid.UUID, before, beforeID any, limit int) ([]ListBatchItem, error) {
+func (r *BatchRepository) ListBatches(ctx context.Context, userID uuid.UUID, before, beforeID any, limit int) ([]ListBatchItem, error) {
 	const q = `
 		SELECT id, watermark_key, created_at, completed_at, expired_at,
  EXTRACT(EPOCH FROM (completed_at - created_at))::double precision AS duration_seconds
 		FROM batches
-		WHERE api_key_id = $1
+		WHERE user_id = $1
 			AND ($2::timestamptz IS NULL OR (created_at, id) < ($2, $3::uuid))
 		ORDER BY created_at DESC, id DESC
 		LIMIT $4
 	`
 
-	rows, err := r.dbpool.Query(ctx, q, apiKeyID, before, beforeID, limit)
+	rows, err := r.dbpool.Query(ctx, q, userID, before, beforeID, limit)
 	if err != nil {
 		return nil, err
 	}
@@ -40,13 +40,13 @@ func (r *BatchRepository) ListBatches(ctx context.Context, apiKeyID uuid.UUID, b
 	return pgx.CollectRows(rows, pgx.RowToStructByName[ListBatchItem])
 }
 
-func (r *BatchRepository) FindByIdempotencyKey(ctx context.Context, apiKeyID uuid.UUID, key string) (Batch, bool, error) {
+func (r *BatchRepository) FindByIdempotencyKey(ctx context.Context, userID uuid.UUID, key string) (Batch, bool, error) {
 	var b Batch
 	err := r.dbpool.QueryRow(ctx, `
 		SELECT id, watermark_key
 		FROM batches
-		WHERE api_key_id = $1 AND idempotency_key = NULLIF($2, '');
-	`, apiKeyID, key).Scan(&b.ID, &b.WatermarkKey)
+		WHERE user_id = $1 AND idempotency_key = NULLIF($2, '');
+	`, userID, key).Scan(&b.ID, &b.WatermarkKey)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return Batch{}, false, nil
 	}
@@ -81,19 +81,19 @@ func (r *BatchRepository) CreateBatch(ctx context.Context, b Batch, promote ...f
 	}
 
 	const insertBatch = `
-		INSERT INTO batches(id, api_key_id, watermark_key, idempotency_key)
+		INSERT INTO batches(id, user_id, watermark_key, idempotency_key)
 		VALUES ($1, $2, $3, NULLIF($4, ''))
-		ON CONFLICT (api_key_id, idempotency_key) DO NOTHING
+		ON CONFLICT (user_id, idempotency_key) DO NOTHING
 		RETURNING id, watermark_key;
 	`
 
-	err = tx.QueryRow(ctx, insertBatch, b.ID, b.APIKeyID, b.WatermarkKey, b.IdempotencyKey).Scan(&b.ID, &b.WatermarkKey)
+	err = tx.QueryRow(ctx, insertBatch, b.ID, b.UserID, b.WatermarkKey, b.IdempotencyKey).Scan(&b.ID, &b.WatermarkKey)
 	if errors.Is(err, pgx.ErrNoRows) {
 		// Release the connection before looking up the committed winner.
 		if err := tx.Rollback(ctx); err != nil {
 			return Batch{}, err
 		}
-		existing, found, err := r.FindByIdempotencyKey(ctx, b.APIKeyID, b.IdempotencyKey)
+		existing, found, err := r.FindByIdempotencyKey(ctx, b.UserID, b.IdempotencyKey)
 		if err == nil && !found {
 			err = pgx.ErrNoRows
 		}
@@ -156,7 +156,7 @@ func (r *BatchRepository) GetBatch(ctx context.Context, owner, id uuid.UUID) (Ba
 	err := r.dbpool.QueryRow(ctx, `
 		SELECT id, watermark_key, created_at, completed_at,
  EXTRACT(EPOCH FROM (completed_at - created_at))::double precision AS duration_seconds, cancelled_at, expired_at FROM batches
-		WHERE id = $1 AND api_key_id = $2
+		WHERE id = $1 AND user_id = $2
 	`, id, owner).Scan(&b.ID, &b.WatermarkKey, &b.CreatedAt, &b.CompletedAt, &b.DurationSeconds, &b.CancelledAt, &b.ExpiredAt)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return b, ErrBatchNotFound
@@ -190,7 +190,7 @@ func (r *BatchRepository) RetryImage(ctx context.Context, owner, batchID, imageI
 	defer tx.Rollback(ctx)
 	var watermark string
 	var cancelled bool
-	err = tx.QueryRow(ctx, "SELECT watermark_key, (cancelled_at IS NOT NULL OR expired_at IS NOT NULL) FROM batches WHERE id=$1 AND api_key_id=$2 FOR UPDATE", batchID, owner).Scan(&watermark, &cancelled)
+	err = tx.QueryRow(ctx, "SELECT watermark_key, (cancelled_at IS NOT NULL OR expired_at IS NOT NULL) FROM batches WHERE id=$1 AND user_id=$2 FOR UPDATE", batchID, owner).Scan(&watermark, &cancelled)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return ErrBatchNotFound
 	}
@@ -248,7 +248,7 @@ func (r *BatchRepository) Cancel(ctx context.Context, owner, id uuid.UUID) error
 	}
 	defer tx.Rollback(ctx)
 	var cancelled bool
-	err = tx.QueryRow(ctx, "SELECT cancelled_at IS NOT NULL FROM batches WHERE id=$1 AND api_key_id=$2 FOR UPDATE", id, owner).Scan(&cancelled)
+	err = tx.QueryRow(ctx, "SELECT cancelled_at IS NOT NULL FROM batches WHERE id=$1 AND user_id=$2 FOR UPDATE", id, owner).Scan(&cancelled)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return ErrBatchNotFound
 	}

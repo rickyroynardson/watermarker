@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/joho/godotenv"
+	"github.com/rickyroynardson/watermarker/apps/api/internal/auth"
 	"github.com/rickyroynardson/watermarker/apps/api/internal/database"
 	"github.com/rickyroynardson/watermarker/apps/api/internal/httpapi"
 	"github.com/rickyroynardson/watermarker/apps/api/internal/logger"
@@ -48,9 +49,14 @@ func main() {
 		logger.Fatal("unable to configure S3", zap.Error(err))
 	}
 
+	login, err := auth.FromEnv(context.Background(), dbpool)
+	if err != nil {
+		logger.Fatal("configure sign-in", zap.Error(err))
+	}
+
 	srv := &http.Server{
 		Addr:    ":8080",
-		Handler: httpapi.NewRouter(dbpool, s3Storage),
+		Handler: httpapi.NewRouter(dbpool, s3Storage, login),
 	}
 
 	logger.Info("API started", zap.String("address", srv.Addr))

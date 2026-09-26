@@ -31,9 +31,9 @@ type batchRepository interface {
 	Cancel(context.Context, uuid.UUID, uuid.UUID) error
 	RetryImage(context.Context, uuid.UUID, uuid.UUID, uuid.UUID, int) error
 	GetBatch(context.Context, uuid.UUID, uuid.UUID) (BatchDetails, error)
-	ListBatches(ctx context.Context, apiKeyID uuid.UUID, before, beforeID any, limit int) ([]ListBatchItem, error)
+	ListBatches(ctx context.Context, userID uuid.UUID, before, beforeID any, limit int) ([]ListBatchItem, error)
 	CreateBatch(ctx context.Context, b Batch, promote ...func(context.Context) error) (Batch, error)
-	FindByIdempotencyKey(ctx context.Context, apiKeyID uuid.UUID, key string) (Batch, bool, error)
+	FindByIdempotencyKey(ctx context.Context, userID uuid.UUID, key string) (Batch, bool, error)
 }
 
 type objectStore interface {
@@ -58,23 +58,23 @@ func NewService(r batchRepository, objects objectStore) *BatchService {
 	}
 }
 
-func persistentKey(apiKeyID uuid.UUID, key string) (string, error) {
-	id, ok := strings.CutPrefix(key, "uploads/"+apiKeyID.String()+"/")
+func persistentKey(userID uuid.UUID, key string) (string, error) {
+	id, ok := strings.CutPrefix(key, "uploads/"+userID.String()+"/")
 	if !ok {
 		return "", ErrInvalidUploadKey
 	}
 	if parsed, err := uuid.Parse(id); err != nil || parsed.String() != id {
 		return "", ErrInvalidUploadKey
 	}
-	return "sources/" + apiKeyID.String() + "/" + id, nil
+	return "sources/" + userID.String() + "/" + id, nil
 }
 
-func prepareBatch(apiKeyID uuid.UUID, req CreateBatchRequest) (Batch, []uploadPromotion, error) {
+func prepareBatch(userID uuid.UUID, req CreateBatchRequest) (Batch, []uploadPromotion, error) {
 	// source order has no meaning, so normalize before storing/comparing.
 	req.SourceKeys = slices.Clone(req.SourceKeys)
 	slices.Sort(req.SourceKeys)
 
-	watermarkKey, err := persistentKey(apiKeyID, req.WatermarkKey)
+	watermarkKey, err := persistentKey(userID, req.WatermarkKey)
 	if err != nil {
 		return Batch{}, nil, err
 	}
@@ -82,7 +82,7 @@ func prepareBatch(apiKeyID uuid.UUID, req CreateBatchRequest) (Batch, []uploadPr
 	uploads := make([]uploadPromotion, 0, 1+len(req.SourceKeys))
 	uploads = append(uploads, uploadPromotion{src: req.WatermarkKey, dst: watermarkKey})
 	for i, key := range req.SourceKeys {
-		p, err := persistentKey(apiKeyID, key)
+		p, err := persistentKey(userID, key)
 		if err != nil {
 			return Batch{}, nil, err
 		}
@@ -92,7 +92,7 @@ func prepareBatch(apiKeyID uuid.UUID, req CreateBatchRequest) (Batch, []uploadPr
 
 	b := Batch{
 		ID:             uuid.New(),
-		APIKeyID:       apiKeyID,
+		UserID:         userID,
 		WatermarkKey:   watermarkKey,
 		IdempotencyKey: req.IdempotencyKey,
 		Images:         images,
@@ -110,13 +110,13 @@ func idempotentBatchResponse(stored, requested Batch) (CreateBatchResponse, erro
 	return CreateBatchResponse{ID: stored.ID}, nil
 }
 
-func (s *BatchService) ListBatches(ctx context.Context, apiKeyID uuid.UUID, p utils.CursorPagination) (ListBatchesResponse, error) {
+func (s *BatchService) ListBatches(ctx context.Context, userID uuid.UUID, p utils.CursorPagination) (ListBatchesResponse, error) {
 	before, beforeID, err := p.Args()
 	if err != nil {
 		return ListBatchesResponse{}, err
 	}
 
-	rows, err := s.repository.ListBatches(ctx, apiKeyID, before, beforeID, p.QueryLimit())
+	rows, err := s.repository.ListBatches(ctx, userID, before, beforeID, p.QueryLimit())
 	if err != nil {
 		return ListBatchesResponse{}, err
 	}
@@ -134,15 +134,15 @@ func (s *BatchService) ListBatches(ctx context.Context, apiKeyID uuid.UUID, p ut
 	return res, nil
 }
 
-func (s *BatchService) CreateBatch(ctx context.Context, apiKeyID uuid.UUID, req CreateBatchRequest) (CreateBatchResponse, error) {
-	b, uploads, err := prepareBatch(apiKeyID, req)
+func (s *BatchService) CreateBatch(ctx context.Context, userID uuid.UUID, req CreateBatchRequest) (CreateBatchResponse, error) {
+	b, uploads, err := prepareBatch(userID, req)
 	if err != nil {
 		return CreateBatchResponse{}, err
 	}
 
 	// replays and conflicts must not depend on S3 availability or change objects.
 	if req.IdempotencyKey != "" {
-		stored, found, err := s.repository.FindByIdempotencyKey(ctx, apiKeyID, req.IdempotencyKey)
+		stored, found, err := s.repository.FindByIdempotencyKey(ctx, userID, req.IdempotencyKey)
 		if err != nil {
 			return CreateBatchResponse{}, err
 		}

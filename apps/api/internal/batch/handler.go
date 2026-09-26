@@ -34,7 +34,7 @@ func (h *BatchHandler) ListBatches(c *gin.Context) {
 		return
 	}
 
-	res, err := h.service.ListBatches(c.Request.Context(), auth.APIKeyID(c), req.CursorPagination)
+	res, err := h.service.ListBatches(c.Request.Context(), auth.UserID(c), req.CursorPagination)
 	if errors.Is(err, utils.ErrInvalidCursor) {
 		utils.RespondError(c, http.StatusBadRequest, utils.CodeInvalidCursor,
 			"cursor is malformed or truncated. omit it to start from the first page")
@@ -67,12 +67,12 @@ func (h *BatchHandler) CreateBatch(c *gin.Context) {
 		return
 	}
 
-	res, err := h.service.CreateBatch(c.Request.Context(), auth.APIKeyID(c), req)
+	res, err := h.service.CreateBatch(c.Request.Context(), auth.UserID(c), req)
 	switch {
 	case errors.Is(err, ErrIdempotencyConflict):
 		utils.RespondError(c, http.StatusConflict, CodeIdempotencyConflict, "idempotency key was already used with a different request")
 	case errors.Is(err, ErrInvalidUploadKey):
-		utils.RespondError(c, http.StatusBadRequest, utils.CodeInvalidRequest, "watermark_key and source_keys must be uploads issued to this API key")
+		utils.RespondError(c, http.StatusBadRequest, utils.CodeInvalidRequest, "watermark_key and source_keys must be uploads issued to this account")
 	case errors.Is(err, ErrUploadNotFound):
 		utils.RespondError(c, http.StatusBadRequest, CodeUploadNotFound, "one or more uploads were not found")
 	case err != nil:
@@ -91,7 +91,7 @@ func (h *BatchHandler) GetBatch(c *gin.Context) {
 		utils.RespondError(c, http.StatusBadRequest, utils.CodeInvalidRequest, "invalid batch ID")
 		return
 	}
-	res, err := h.service.GetBatch(c.Request.Context(), auth.APIKeyID(c), id)
+	res, err := h.service.GetBatch(c.Request.Context(), auth.UserID(c), id)
 	switch {
 	case errors.Is(err, ErrBatchNotFound):
 		utils.RespondError(c, http.StatusNotFound, "not_found", "batch not found")
@@ -113,7 +113,7 @@ func (h *BatchHandler) RetryImage(c *gin.Context) {
 		utils.RespondError(c, 400, utils.CodeInvalidRequest, "valid IDs and a nonnegative attempt are required")
 		return
 	}
-	err = h.service.repository.RetryImage(c.Request.Context(), auth.APIKeyID(c), batchID, imageID, *req.Attempt)
+	err = h.service.repository.RetryImage(c.Request.Context(), auth.UserID(c), batchID, imageID, *req.Attempt)
 	switch {
 	case errors.Is(err, ErrBatchNotFound):
 		utils.RespondError(c, 404, "not_found", "batch or image not found")
@@ -133,7 +133,7 @@ func (h *BatchHandler) Cancel(c *gin.Context) {
 		utils.RespondError(c, 400, utils.CodeInvalidRequest, "invalid batch ID")
 		return
 	}
-	err = h.service.repository.Cancel(c.Request.Context(), auth.APIKeyID(c), id)
+	err = h.service.repository.Cancel(c.Request.Context(), auth.UserID(c), id)
 	switch {
 	case errors.Is(err, ErrBatchNotFound):
 		utils.RespondError(c, 404, "not_found", "batch not found")

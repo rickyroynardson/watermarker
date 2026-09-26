@@ -1,6 +1,6 @@
 # Web
 
-Minimal React + TypeScript UI for every current API endpoint: ping, presign/upload,
+React + TypeScript UI for sign-in, API keys, presign/upload,
 create batch, cursor-paginated batch history, and batch results. Vite, Tailwind CSS, Oxlint, and
 Oxfmt; no router, component library, or state/query library.
 
@@ -14,11 +14,14 @@ npm ci
 npm run dev
 ```
 
-Open http://localhost:5173 and enter an existing API key. The key stays in memory.
+Open http://localhost:5173 and sign in, or enter an existing API key. The key stays in memory.
 `/api` is proxied to `http://localhost:8080`; to change the backend, run
 `API_TARGET=http://localhost:8081 npm run dev`. Do not put API keys in Vite env vars.
-The API has no key-creation endpoint; provision keys through your existing database workflow
-(`api_keys.key_hash` stores the hex SHA-256 of the bearer key).
+For browser sign-in, configure OIDC using the [API setup](../api/README.md#browser-sign-in-and-ownership).
+The Account panel then offers sign-in/out and creating/revoking API keys for scripts.
+Sign-in uses an HttpOnly session cookie; the frontend never stores provider tokens.
+The API stores only key hashes and associates each key with a stable user ID.
+Legacy keys remain usable, but their data is not automatically linked to a new sign-in.
 
 Select one watermark and one or more sources, then upload and create a batch.
 The API consumer and Python worker must also be running for processing.

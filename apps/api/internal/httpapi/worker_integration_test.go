@@ -135,7 +135,7 @@ func testPythonWorker(t *testing.T, db *pgxpool.Pool, s3Client *s3.Client, sqsCl
 	require.Equal(t, "failed", status)
 	require.NotEmpty(t, reason)
 	// A job already in SQS is acknowledged without reading nonexistent S3 inputs.
-	cancelledBatch := batch.Batch{ID: uuid.New(), APIKeyID: owner, WatermarkKey: "sources/" + owner.String() + "/" + uuid.NewString(), Images: []batch.Image{{ID: uuid.New(), SourceKey: "sources/" + owner.String() + "/" + uuid.NewString()}}}
+	cancelledBatch := batch.Batch{ID: uuid.New(), UserID: owner, WatermarkKey: "sources/" + owner.String() + "/" + uuid.NewString(), Images: []batch.Image{{ID: uuid.New(), SourceKey: "sources/" + owner.String() + "/" + uuid.NewString()}}}
 	repo := batch.NewRepository(db)
 	_, err = repo.CreateBatch(ctx, cancelledBatch)
 	require.NoError(t, err)

@@ -35,7 +35,7 @@ func TestPresign(t *testing.T) {
 		c, _ := gin.CreateTestContext(w)
 		c.Request = httptest.NewRequest(http.MethodPost, "/uploads/presign", strings.NewReader(body))
 		c.Request.Header.Set("Content-Type", "application/json")
-		c.Set("api_key_id", owner)
+		c.Set("user_id", owner)
 		handler.Presign(c)
 		return w
 	}

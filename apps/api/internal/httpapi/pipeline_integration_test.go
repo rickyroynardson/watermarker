@@ -40,7 +40,7 @@ func testPipeline(t *testing.T, ctx context.Context, originalDB *pgxpool.Pool, s
 	}
 	repo := batch.NewRepository(db)
 	newBatch := func() batch.Batch {
-		return batch.Batch{ID: uuid.New(), APIKeyID: owner, IdempotencyKey: uuid.NewString(),
+		return batch.Batch{ID: uuid.New(), UserID: owner, IdempotencyKey: uuid.NewString(),
 			WatermarkKey: "sources/" + owner.String() + "/" + uuid.NewString(),
 			Images:       []batch.Image{{ID: uuid.New(), SourceKey: "sources/" + owner.String() + "/" + uuid.NewString()}}}
 	}

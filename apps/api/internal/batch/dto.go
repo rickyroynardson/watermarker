@@ -37,7 +37,7 @@ type CreateBatchResponse struct {
 
 type Batch struct {
 	ID             uuid.UUID `json:"id"`
-	APIKeyID       uuid.UUID `json:"api_key_id"`
+	UserID         uuid.UUID `json:"user_id"`
 	WatermarkKey   string    `json:"watermark_key"`
 	IdempotencyKey string    `json:"idempotency_key"`
 	Images         []Image   `json:"images"`

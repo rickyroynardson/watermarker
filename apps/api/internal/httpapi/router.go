@@ -26,7 +26,7 @@ import (
 	"go.uber.org/zap"
 )
 
-func NewRouter(dbpool *pgxpool.Pool, s3Storage *storage.S3) http.Handler {
+func NewRouter(dbpool *pgxpool.Pool, s3Storage *storage.S3, logins ...*auth.Login) http.Handler {
 	r := gin.New()
 	r.Use(func(c *gin.Context) {
 		ctx := tracing.Propagator.Extract(c.Request.Context(), propagation.HeaderCarrier(c.Request.Header))
@@ -54,13 +54,18 @@ func NewRouter(dbpool *pgxpool.Pool, s3Storage *storage.S3) http.Handler {
 		c.AbortWithStatus(http.StatusInternalServerError)
 	}))
 
+	var login *auth.Login
+	if len(logins) > 0 {
+		login = logins[0]
+	}
+	requireUser := auth.Register(r, dbpool, login)
 	validator := utils.NewValidator()
 
 	batchRepository := batch.NewRepository(dbpool)
 	batchService := batch.NewService(batchRepository, s3Storage)
 	batchHandler := batch.NewHandler(validator, batchService)
 
-	batches := r.Group("/batches", auth.RequireAPIKey(dbpool))
+	batches := r.Group("/batches", requireUser)
 	batches.GET("", batchHandler.ListBatches)
 	batches.GET("/:id", batchHandler.GetBatch)
 	batches.POST("", batchHandler.CreateBatch)
@@ -68,7 +73,7 @@ func NewRouter(dbpool *pgxpool.Pool, s3Storage *storage.S3) http.Handler {
 	batches.POST("/:id/images/:imageID/retry", batchHandler.RetryImage)
 
 	uploadHandler := upload.NewHandler(validator, s3Storage)
-	r.POST("/uploads/presign", auth.RequireAPIKey(dbpool), uploadHandler.Presign)
+	r.POST("/uploads/presign", requireUser, uploadHandler.Presign)
 
 	// Worker-only read endpoint; the shared token grants no batch mutation rights.
 	r.GET("/internal/batches/:id/cancellation", func(c *gin.Context) {
