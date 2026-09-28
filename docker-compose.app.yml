@@ -1,0 +1,143 @@
+# Overlay: docker compose -f docker-compose.yml -f docker-compose.app.yml up -d --build
+x-runtime: &runtime
+  APP_ENV: development
+  DATABASE_URL: postgres://watermarker:watermarker@postgres:5432/watermarker?sslmode=disable
+  REDIS_URL: redis://redis:6379/0
+  AWS_REGION: us-east-1
+  AWS_DEFAULT_REGION: us-east-1
+  AWS_ACCESS_KEY_ID: test
+  AWS_SECRET_ACCESS_KEY: test
+  # Use the static LocalStack credentials without a host session token.
+  AWS_SESSION_TOKEN: ""
+  AWS_ENDPOINT_URL: http://localhost.localstack.cloud:4566
+  AWS_ENDPOINT_URL_S3: http://localhost.localstack.cloud:4566
+  AWS_ENDPOINT_URL_SQS: http://localhost.localstack.cloud:4566
+  S3_BUCKET: watermarker
+  SQS_JOBS_QUEUE_URL: http://localhost.localstack.cloud:4566/000000000000/watermarker-jobs
+  SQS_RESULTS_QUEUE_URL: http://localhost.localstack.cloud:4566/000000000000/watermarker-results
+  SQS_JOBS_DLQ_QUEUE_URL: http://localhost.localstack.cloud:4566/000000000000/watermarker-jobs-dlq
+  SQS_RESULTS_DLQ_QUEUE_URL: http://localhost.localstack.cloud:4566/000000000000/watermarker-results-dlq
+  WORKER_API_URL: http://api:8080
+  WORKER_API_TOKEN: ${WORKER_API_TOKEN:-local-compose-worker-token}
+  OTEL_EXPORTER_OTLP_ENDPOINT: ${CONTAINER_OTEL_ENDPOINT:-}
+
+x-go: &go
+  image: watermarker-api:local
+  build: ./apps/api
+  environment: *runtime
+  extra_hosts:
+    - host.docker.internal:host-gateway
+  stop_grace_period: 45s
+
+services:
+  localstack:
+    environment:
+      LOCALSTACK_HOST: localhost.localstack.cloud:4566
+      SQS_ENDPOINT_STRATEGY: "off"
+    healthcheck:
+      # Wait for both queues and DLQs, not just the first resource created by init.sh.
+      test:
+        - CMD-SHELL
+        - >-
+          curl -fsS http://localhost:4566/_localstack/init/ready |
+          python3 -c 'import json,sys; s=json.load(sys.stdin); sys.exit(not (s["completed"] and s["scripts"] and all(x["state"]=="SUCCESSFUL" for x in s["scripts"])))'
+      interval: 5s
+      timeout: 5s
+      retries: 30
+    networks:
+      default:
+        aliases:
+          - localhost.localstack.cloud
+
+  migrate:
+    <<: *go
+    command: ["goose", "-dir", "/app/migrations", "up"]
+    environment:
+      GOOSE_DRIVER: postgres
+      GOOSE_DBSTRING: postgres://watermarker:watermarker@postgres:5432/watermarker?sslmode=disable
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+  api:
+    <<: *go
+    # Only the API needs the existing browser sign-in configuration.
+    env_file:
+      - path: ./apps/api/.env
+        required: false
+    environment:
+      <<: *runtime
+      # Override host profiles imported from the optional env file.
+      AWS_PROFILE: ""
+      AWS_DEFAULT_PROFILE: ""
+    restart: unless-stopped
+    ports:
+      - '127.0.0.1:8080:8080'
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+      redis:
+        condition: service_healthy
+      localstack:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "wget", "-q", "-O", "/dev/null", "http://127.0.0.1:8080/ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 12
+
+  consumer:
+    <<: *go
+    command: ["consumer"]
+    restart: unless-stopped
+    depends_on:
+      api:
+        condition: service_healthy
+
+  worker:
+    image: watermarker-worker:local
+    build: ./apps/worker
+    environment:
+      <<: *runtime
+      DATABASE_URL: ""
+      REDIS_URL: ""
+    extra_hosts:
+      - host.docker.internal:host-gateway
+    restart: unless-stopped
+    # Current work finishes on SIGTERM; allow image processing and SQS calls to return.
+    stop_grace_period: 2m
+    depends_on:
+      api:
+        condition: service_healthy
+
+  web:
+    image: watermarker-web:local
+    build: ./apps/web
+    restart: unless-stopped
+    ports:
+      - '127.0.0.1:5173:8080'
+    depends_on:
+      api:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "wget", "-q", "-O", "/dev/null", "http://127.0.0.1:8080/health"]
+      interval: 5s
+      timeout: 3s
+      retries: 12
+
+  monitor:
+    <<: *go
+    profiles: ["monitor"]
+    command: ["monitor"]
+    depends_on:
+      api:
+        condition: service_healthy
+
+  cleanup:
+    <<: *go
+    profiles: ["tools"]
+    entrypoint: ["cleanup"]
+    command: []
+    depends_on:
+      api:
+        condition: service_healthy

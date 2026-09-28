@@ -1,5 +1,7 @@
 # Python worker
 
+To run the complete application in containers, see [the container guide](../../docs/containers.md).
+
 Consumes one image job at a time from SQS, downloads the source and watermark,
 composites them with Pillow, writes a PNG to S3, and publishes the result for the
 Go consumer. Uses Python 3.14, `boto3`, `Pillow`, and OpenTelemetry logging.

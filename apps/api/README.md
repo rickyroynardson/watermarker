@@ -1,5 +1,7 @@
 # API
 
+To run the complete application in containers, see [the container guide](../../docs/containers.md).
+
 Run from `apps/api` with `go run ./cmd/api`. The API loads `.env` from its
 working directory; add the AWS settings from the root `.env.example` to
 `apps/api/.env` alongside `DATABASE_URL` and `REDIS_URL` (defaults to `redis://localhost:6379/0`). Start infrastructure with `make up`

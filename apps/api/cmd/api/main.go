@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"errors"
 	"net"
 	"net/http"
 	"os"
@@ -32,8 +33,8 @@ func main() {
 	shutdownTraces := tracing.New("watermarker-api")
 	defer shutdownTraces()
 
-	if envErr != nil {
-		logger.Warn("no .env file loaded", zap.Error(envErr))
+	if envErr != nil && !errors.Is(envErr, os.ErrNotExist) {
+		logger.Warn("could not load optional .env file", zap.Error(envErr))
 	}
 
 	dbpool, err := database.ConnectPgx(context.Background(), os.Getenv("DATABASE_URL"))

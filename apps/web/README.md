@@ -1,5 +1,7 @@
 # Web
 
+To run the complete application in containers, see [the container guide](../../docs/containers.md).
+
 React + TypeScript UI for sign-in, API keys, presign/upload,
 create batch, cursor-paginated batch history, and batch results. Vite, Tailwind CSS, Oxlint, and
 Oxfmt; no router, component library, or state/query library.

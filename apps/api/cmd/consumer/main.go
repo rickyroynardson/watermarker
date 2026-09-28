@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"errors"
 	"os"
 	"os/signal"
 	"syscall"
@@ -28,8 +29,8 @@ func main() {
 	defer shutdownMetrics()
 	shutdownTraces := tracing.New("watermarker-consumer")
 	defer shutdownTraces()
-	if envErr != nil {
-		log.Warn("no .env file loaded", zap.Error(envErr))
+	if envErr != nil && !errors.Is(envErr, os.ErrNotExist) {
+		log.Warn("could not load optional .env file", zap.Error(envErr))
 	}
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
