@@ -30,9 +30,9 @@ idempotency key is retained until you change files or credentials or reload.
 After an uncertain submission, retry before changing files or reloading.
 New batches open their results automatically. Use **View results** in history to
 reopen a batch. Results show per-image pending/done/failed status, worker errors,
-previews, and individual downloads. Pending batches poll every 3 seconds; terminal
-batches refresh signed links every 10 minutes. Refresh manually after a network
-error or if a link has expired. Switching batches or credentials cancels polling.
+previews, and individual downloads. Batch progress arrives through SSE as changes commit. Reconnects load the latest
+snapshot; signed links renew when the stream reconnects. Refresh manually after a network
+error or if a link has expired. Switching batches or credentials cancels the previous stream.
 Pending means queued or processing; the worker does not emit a separate running event.
 
 ## Browser uploads
@@ -64,3 +64,9 @@ API errors, and safe retry after losing a batch-creation response.
 `npm run build` writes `dist/`. For deployment, serve it behind a reverse proxy
 that forwards `/api/*` to the Go API with `/api` stripped. `npm run preview` only
 previews static assets; it does not configure the production API proxy.
+
+Live updates require Redis and the updated API and consumer. The
+panel shows connection/reconnect status; use Refresh after an authentication or
+ownership error. Both signed-in sessions and API keys are supported, with no
+credentials placed in stream URLs. The SSE reader/reconnection tests are included
+in `npm run check`.

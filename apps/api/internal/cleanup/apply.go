@@ -8,11 +8,12 @@ import (
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
+	"github.com/rickyroynardson/watermarker/apps/api/internal/live"
 )
 
 // Reserve rechecks live state and commits permanent key tombstones before S3 deletion.
 // ponytail: one global cleanup lock; creators share it, partition by owner if contention grows.
-func Reserve(ctx context.Context, db *pgxpool.Pool, before time.Time, limit int) (int, error) {
+func Reserve(ctx context.Context, db *pgxpool.Pool, before time.Time, limit int, events ...*live.Events) (int, error) {
 	if limit < 1 || limit > 1000 {
 		return 0, errors.New("limit must be 1-1000")
 	}
@@ -38,12 +39,17 @@ func Reserve(ctx context.Context, db *pgxpool.Pool, before time.Time, limit int)
 		return 0, err
 	}
 	// Recheck after acquiring the batch locks (a retry may have won the race).
-	_, err = tx.Exec(ctx, `
+	rows, err = tx.Query(ctx, `
  UPDATE batches b SET expired_at=clock_timestamp() WHERE id=ANY($1)
  AND b.completed_at < $2
  AND NOT EXISTS (SELECT 1 FROM images i WHERE i.batch_id=b.id AND (i.status='pending' OR i.retryable))
  AND NOT EXISTS (SELECT 1 FROM images i JOIN outbox_messages o ON o.image_id=i.id WHERE i.batch_id=b.id)
+ RETURNING b.id
  `, ids, before)
+	if err != nil {
+		return 0, err
+	}
+	expired, err := pgx.CollectRows(rows, pgx.RowTo[uuid.UUID])
 	if err != nil {
 		return 0, err
 	}
@@ -64,6 +70,11 @@ func Reserve(ctx context.Context, db *pgxpool.Pool, before time.Time, limit int)
 	}
 	if err = tx.Commit(ctx); err != nil {
 		return 0, err
+	}
+	if len(events) > 0 {
+		for _, id := range expired {
+			events[0].Publish(ctx, id)
+		}
 	}
 	return len(candidates), nil
 }

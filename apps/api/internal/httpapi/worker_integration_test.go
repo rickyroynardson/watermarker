@@ -53,7 +53,7 @@ func testPythonWorker(t *testing.T, db *pgxpool.Pool, s3Client *s3.Client, sqsCl
 	results, err := queue.NewSQS(ctx, aws.ToString(resultsQueue.QueueUrl))
 	require.NoError(t, err)
 	t.Setenv("WORKER_API_TOKEN", "worker-integration-token")
-	server := httptest.NewServer(httpapi.NewRouter(db, objects))
+	server := httptest.NewServer(httpapi.NewRouter(db, objects, nil))
 	defer server.Close()
 	t.Setenv("WORKER_API_URL", server.URL)
 	workerDir, err := filepath.Abs("../../../worker")

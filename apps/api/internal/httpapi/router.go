@@ -5,6 +5,7 @@ import (
 	"errors"
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
+	"github.com/rickyroynardson/watermarker/apps/api/internal/live"
 	"github.com/rickyroynardson/watermarker/apps/api/internal/metrics"
 	"github.com/rickyroynardson/watermarker/apps/api/internal/tracing"
 	"go.opentelemetry.io/otel/attribute"
@@ -26,7 +27,7 @@ import (
 	"go.uber.org/zap"
 )
 
-func NewRouter(dbpool *pgxpool.Pool, s3Storage *storage.S3, logins ...*auth.Login) http.Handler {
+func NewRouter(dbpool *pgxpool.Pool, s3Storage *storage.S3, events *live.Events, logins ...*auth.Login) http.Handler {
 	r := gin.New()
 	r.Use(func(c *gin.Context) {
 		ctx := tracing.Propagator.Extract(c.Request.Context(), propagation.HeaderCarrier(c.Request.Header))
@@ -61,13 +62,14 @@ func NewRouter(dbpool *pgxpool.Pool, s3Storage *storage.S3, logins ...*auth.Logi
 	requireUser := auth.Register(r, dbpool, login)
 	validator := utils.NewValidator()
 
-	batchRepository := batch.NewRepository(dbpool)
+	batchRepository := batch.NewRepository(dbpool, events)
 	batchService := batch.NewService(batchRepository, s3Storage)
 	batchHandler := batch.NewHandler(validator, batchService)
 
 	batches := r.Group("/batches", requireUser)
 	batches.GET("", batchHandler.ListBatches)
 	batches.GET("/:id", batchHandler.GetBatch)
+	batches.GET("/:id/events", batchEvents(dbpool, batchService, events))
 	batches.POST("", batchHandler.CreateBatch)
 	batches.POST("/:id/cancel", batchHandler.Cancel)
 	batches.POST("/:id/images/:imageID/retry", batchHandler.RetryImage)

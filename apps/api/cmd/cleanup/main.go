@@ -14,6 +14,7 @@ import (
 	"github.com/joho/godotenv"
 	"github.com/rickyroynardson/watermarker/apps/api/internal/cleanup"
 	"github.com/rickyroynardson/watermarker/apps/api/internal/database"
+	"github.com/rickyroynardson/watermarker/apps/api/internal/live"
 	"github.com/rickyroynardson/watermarker/apps/api/internal/storage"
 )
 
@@ -58,7 +59,12 @@ func run() error {
 		if err := objects.RequireUnversioned(ctx); err != nil {
 			return err
 		}
-		scheduled, err := cleanup.Reserve(ctx, db, before, *limit)
+		events, err := live.FromEnv()
+		if err != nil {
+			return fmt.Errorf("configure Redis URL: %w", err)
+		}
+		defer events.Close()
+		scheduled, err := cleanup.Reserve(ctx, db, before, *limit, events)
 		if err != nil {
 			return err
 		}

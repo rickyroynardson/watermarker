@@ -7,6 +7,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/rickyroynardson/watermarker/apps/api/internal/live"
 	"github.com/rickyroynardson/watermarker/apps/api/internal/metrics"
 
 	"github.com/google/uuid"
@@ -47,11 +48,16 @@ func (r Result) Validate() error {
 }
 
 type ResultHandler struct {
-	db *pgxpool.Pool
+	db     *pgxpool.Pool
+	events *live.Events
 }
 
-func NewResultHandler(db *pgxpool.Pool) *ResultHandler {
-	return &ResultHandler{db: db}
+func NewResultHandler(db *pgxpool.Pool, events ...*live.Events) *ResultHandler {
+	h := &ResultHandler{db: db}
+	if len(events) > 0 {
+		h.events = events[0]
+	}
+	return h
 }
 
 func (h *ResultHandler) Handle(ctx context.Context, body string) (err error) {
@@ -128,6 +134,7 @@ func (h *ResultHandler) apply(ctx context.Context, result Result, retryable bool
 	if err := tx.Commit(ctx); err != nil {
 		return err
 	}
+	h.events.Publish(ctx, result.BatchID)
 	metrics.ImageCompleted(ctx, result.Status)
 	if completed {
 		metrics.BatchCompleted(ctx, seconds, failed)

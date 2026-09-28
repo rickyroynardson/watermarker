@@ -1,6 +1,7 @@
 package auth
 
 import (
+	"context"
 	"crypto/sha256"
 	"encoding/hex"
 	"errors"
@@ -34,7 +35,9 @@ func RequireUser(db *pgxpool.Pool, origin string) gin.HandlerFunc {
 				unauthorized(c)
 				return
 			}
-			err = db.QueryRow(c.Request.Context(), "SELECT user_id FROM api_keys WHERE key_hash=$1 AND revoked_at IS NULL", hash(key)).Scan(&id)
+			digest := hash(key)
+			err = db.QueryRow(c.Request.Context(), "SELECT user_id FROM api_keys WHERE key_hash=$1 AND revoked_at IS NULL", digest).Scan(&id)
+			c.Set("api_key_hash", digest)
 		} else {
 			if origin == "" {
 				unauthorized(c)
@@ -85,4 +88,15 @@ func sessionOnly(c *gin.Context) {
 		return
 	}
 	c.Next()
+}
+
+// Active revalidates the original credential on a long-lived stream.
+func Active(ctx context.Context, db *pgxpool.Pool, c *gin.Context) (bool, error) {
+	var active bool
+	if digest := c.GetString("api_key_hash"); digest != "" {
+		err := db.QueryRow(ctx, "SELECT EXISTS(SELECT 1 FROM api_keys WHERE key_hash=$1 AND user_id=$2 AND revoked_at IS NULL)", digest, UserID(c)).Scan(&active)
+		return active, err
+	}
+	err := db.QueryRow(ctx, "SELECT EXISTS(SELECT 1 FROM auth_sessions WHERE token_hash=$1 AND user_id=$2 AND expires_at>now())", c.GetString("session_hash"), UserID(c)).Scan(&active)
+	return active, err
 }

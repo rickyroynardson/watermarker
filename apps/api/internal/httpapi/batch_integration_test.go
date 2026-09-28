@@ -31,6 +31,7 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/rickyroynardson/watermarker/apps/api/internal/batch"
 	"github.com/rickyroynardson/watermarker/apps/api/internal/httpapi"
+	"github.com/rickyroynardson/watermarker/apps/api/internal/live"
 	"github.com/rickyroynardson/watermarker/apps/api/internal/outbox"
 	"github.com/rickyroynardson/watermarker/apps/api/internal/queue"
 	"github.com/rickyroynardson/watermarker/apps/api/internal/storage"
@@ -39,6 +40,7 @@ import (
 	"github.com/testcontainers/testcontainers-go"
 	"github.com/testcontainers/testcontainers-go/modules/localstack"
 	"github.com/testcontainers/testcontainers-go/modules/postgres"
+	"github.com/testcontainers/testcontainers-go/wait"
 )
 
 func useActiveDockerContext(t *testing.T) {
@@ -112,6 +114,20 @@ func TestBatchAPIIntegration(t *testing.T) {
 		require.NoError(t, err)
 	}
 
+	redisContainer, err := testcontainers.GenericContainer(ctx, testcontainers.GenericContainerRequest{
+		ContainerRequest: testcontainers.ContainerRequest{Image: "redis:8-alpine", ExposedPorts: []string{"6379/tcp"}, WaitingFor: wait.ForListeningPort("6379/tcp")}, Started: true,
+	})
+	testcontainers.CleanupContainer(t, redisContainer)
+	require.NoError(t, err)
+	redisURL, err := redisContainer.PortEndpoint(ctx, "6379/tcp", "redis")
+	require.NoError(t, err)
+	events, err := live.New(redisURL)
+	require.NoError(t, err)
+	defer events.Close()
+	stopEvents, err := events.Listen(ctx)
+	require.NoError(t, err)
+	defer stopEvents()
+
 	awsContainer, err := localstack.Run(ctx, "localstack/localstack:4.14.0",
 		testcontainers.WithEnv(map[string]string{"SERVICES": "s3,sqs"}))
 	testcontainers.CleanupContainer(t, awsContainer)
@@ -152,7 +168,7 @@ func TestBatchAPIIntegration(t *testing.T) {
 	jobs, err := queue.NewSQS(ctx, aws.ToString(createdQueue.QueueUrl))
 	require.NoError(t, err)
 	gin.SetMode(gin.TestMode)
-	router := httpapi.NewRouter(db, objects)
+	router := httpapi.NewRouter(db, objects, events)
 	request := func(method, path, token, idempotencyKey, body string) *httptest.ResponseRecorder {
 		r := httptest.NewRequestWithContext(ctx, method, path, strings.NewReader(body))
 		r.Header.Set("Content-Type", "application/json")
@@ -185,7 +201,7 @@ func TestBatchAPIIntegration(t *testing.T) {
 		require.NoError(t, err)
 		return id, token
 	}
-	t.Run("OIDC sign-in and user ownership", func(t *testing.T) { testOIDC(t, db, objects) })
+	t.Run("OIDC sign-in and user ownership", func(t *testing.T) { testOIDC(t, db, objects, events) })
 	owner, token := seedKey()
 	_, otherToken := seedKey()
 	revokedID, revokedToken := seedKey()
@@ -502,6 +518,7 @@ func TestBatchAPIIntegration(t *testing.T) {
 			require.NoError(t, err)
 		}
 	})
+	t.Run("SSE progress", func(t *testing.T) { testBatchEvents(t, db, objects, owner, otherToken, events, redisURL) })
 	t.Run("pipeline", func(t *testing.T) {
 		testPipeline(t, ctx, db, sqsClient, owner)
 	})

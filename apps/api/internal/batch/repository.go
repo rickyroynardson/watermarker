@@ -7,17 +7,21 @@ import (
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
+	"github.com/rickyroynardson/watermarker/apps/api/internal/live"
 	"github.com/rickyroynardson/watermarker/apps/api/internal/tracing"
 )
 
 type BatchRepository struct {
 	dbpool *pgxpool.Pool
+	events *live.Events
 }
 
-func NewRepository(db *pgxpool.Pool) *BatchRepository {
-	return &BatchRepository{
-		dbpool: db,
+func NewRepository(db *pgxpool.Pool, events ...*live.Events) *BatchRepository {
+	r := &BatchRepository{dbpool: db}
+	if len(events) > 0 {
+		r.events = events[0]
 	}
+	return r
 }
 
 func (r *BatchRepository) ListBatches(ctx context.Context, userID uuid.UUID, before, beforeID any, limit int) ([]ListBatchItem, error) {
@@ -148,6 +152,7 @@ func (r *BatchRepository) CreateBatch(ctx context.Context, b Batch, promote ...f
 		return Batch{}, err
 	}
 
+	r.events.Publish(ctx, b.ID)
 	return b, nil
 }
 
@@ -237,7 +242,11 @@ func (r *BatchRepository) RetryImage(ctx context.Context, owner, batchID, imageI
 	if err != nil {
 		return err
 	}
-	return tx.Commit(ctx)
+	if err := tx.Commit(ctx); err != nil {
+		return err
+	}
+	r.events.Publish(ctx, batchID)
+	return nil
 }
 
 // Cancel uses the same batch lock as result handling and retry.
@@ -273,5 +282,9 @@ func (r *BatchRepository) Cancel(ctx context.Context, owner, id uuid.UUID) error
 	if err != nil {
 		return err
 	}
-	return tx.Commit(ctx)
+	if err := tx.Commit(ctx); err != nil {
+		return err
+	}
+	r.events.Publish(ctx, id)
+	return nil
 }

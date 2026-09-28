@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"net"
 	"net/http"
 	"os"
 	"os/signal"
@@ -12,6 +13,7 @@ import (
 	"github.com/rickyroynardson/watermarker/apps/api/internal/auth"
 	"github.com/rickyroynardson/watermarker/apps/api/internal/database"
 	"github.com/rickyroynardson/watermarker/apps/api/internal/httpapi"
+	"github.com/rickyroynardson/watermarker/apps/api/internal/live"
 	"github.com/rickyroynardson/watermarker/apps/api/internal/logger"
 	"github.com/rickyroynardson/watermarker/apps/api/internal/metrics"
 	"github.com/rickyroynardson/watermarker/apps/api/internal/storage"
@@ -54,9 +56,22 @@ func main() {
 		logger.Fatal("configure sign-in", zap.Error(err))
 	}
 
+	rootCtx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
+	defer stop()
+	events, err := live.FromEnv()
+	if err != nil {
+		logger.Fatal("configure Redis URL", zap.Error(err))
+	}
+	defer events.Close()
+	stopEvents, err := events.Listen(rootCtx)
+	if err != nil {
+		logger.Fatal("subscribe to Redis", zap.Error(err))
+	}
+	defer stopEvents()
 	srv := &http.Server{
-		Addr:    ":8080",
-		Handler: httpapi.NewRouter(dbpool, s3Storage, login),
+		BaseContext: func(net.Listener) context.Context { return rootCtx },
+		Addr:        ":8080",
+		Handler:     httpapi.NewRouter(dbpool, s3Storage, events, login),
 	}
 
 	logger.Info("API started", zap.String("address", srv.Addr))
@@ -66,9 +81,7 @@ func main() {
 		}
 	}()
 
-	quit := make(chan os.Signal, 1)
-	signal.Notify(quit, syscall.SIGINT, syscall.SIGTERM)
-	<-quit
+	<-rootCtx.Done()
 
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()

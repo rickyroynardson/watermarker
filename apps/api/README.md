@@ -2,7 +2,7 @@
 
 Run from `apps/api` with `go run ./cmd/api`. The API loads `.env` from its
 working directory; add the AWS settings from the root `.env.example` to
-`apps/api/.env` alongside `DATABASE_URL`. Start infrastructure with `make up`
+`apps/api/.env` alongside `DATABASE_URL` and `REDIS_URL` (defaults to `redis://localhost:6379/0`). Start infrastructure with `make up`
 and apply migrations with `make migrate-up` from the repository root.
 
 For AWS, set `S3_BUCKET` and `AWS_REGION`, remove the LocalStack endpoint and
@@ -239,8 +239,8 @@ Run from `apps/api` with Docker running:
 go test -race -count=1 ./...
 ```
 
-[Testcontainers](https://golang.testcontainers.org/) starts disposable PostgreSQL
-and LocalStack containers on random ports and removes them after the tests.
+[Testcontainers](https://golang.testcontainers.org/) starts disposable PostgreSQL,
+Redis and LocalStack containers on random ports and removes them after the tests.
 No `make up`, database URL, AWS account, or manually applied migrations are needed.
 The first run downloads the container images. Tests pin LocalStack to the
 4.14.0 community image, which does not require the development stack's auth token.
@@ -421,3 +421,59 @@ inventoried. Grace is not a distributed process fence: a suspended worker resumi
 after its final check can still leave an untracked output. No database rows,
 tombstones or staging uploads are purged by this command. The planner scans all
 references; large inventories may require pagination and indexing.
+
+## Live batch progress (SSE)
+
+Start Redis with `docker compose up -d redis` and restart both the API and
+consumer before opening results. This feature requires no database migration.
+API, consumer and cleanup must use the same `REDIS_URL`; local processes default
+to `redis://localhost:6379/0`.
+Container deployments use the Redis service hostname instead of localhost.
+The API requires Redis to be reachable at startup. Consumer/cleanup publication
+is best effort and bounded to one second per change; outages are logged without
+failing committed database operations. Invalid Redis URLs fail configuration.
+`GET /batches/:id/events` accepts the same session cookie or Bearer API key as
+batch details and enforces the same ownership check. It sends
+`Content-Type: text/event-stream`, `Cache-Control: no-store`, and
+`X-Accel-Buffering: no`.
+
+Each named `batch` event contains the current `BatchDetails` JSON, including fresh
+signed links. The connection subscribes before reading its initial snapshot.
+The API, result consumer and cleanup command publish batch IDs to
+`watermarker:batch_changes` after database commits, covering successful results,
+failures/DLQ exhaustion, retries, cancellation and expiration. No new
+worker message format is required. There is still no separate worker-running
+status; pending means queued or processing.
+
+Notifications are wake-up signals, not durable event history. Every reconnect
+reads the current database state, so missed changes are recovered without
+replaying intermediate transitions. The browser uses streaming fetch so it can
+send Bearer headers without exposing keys in URLs. It retries transient failures
+with a 1–15 second backoff and stops on 400/401/403/404. A 45-second inactivity
+watchdog reconnects stalled connections; the server sends keepalive comments
+every 15 seconds. Credential validity is checked on notifications/keepalives;
+revoked/expired credentials close the connection, and reconnect receives 401.
+
+Connections rotate after two minutes, renewing signed links via the next initial
+snapshot. Terminal batches remain subscribed while the results panel is open,
+so a retry/cancellation from another tab also updates it. Switching batches,
+refreshing, and closing the panel cancel the previous connection. API shutdown
+cancels streams before waiting for HTTP shutdown.
+
+Each API process has one shared Redis subscriber, distributing notifications only
+to viewers of the changed batch. A one-slot queue per viewer coalesces changes so
+slow browsers cannot block other viewers. Redis re-subscriptions wake all viewers
+to recover missed changes.
+
+Redis Pub/Sub has no persistence or replay. A crash between commit and publish,
+or a failed publication, can leave a connected viewer stale until its next
+snapshot (connections rotate after two minutes). Use a transactional event outbox
+if guaranteed publication becomes necessary. SQS job delivery still uses the
+existing durable outbox and is unchanged. Redis stores no job state, sessions,
+credentials or file URLs; no Redis data volume is needed for this usage.
+Full snapshots are capped at 8 MiB in the browser; use incremental image events
+for very large batches.
+
+Production proxies must pass streaming responses immediately (disable buffering
+and caching for this endpoint) and allow timeouts beyond the heartbeat interval.
+The existing Vite `/api` proxy forwards the stream locally.

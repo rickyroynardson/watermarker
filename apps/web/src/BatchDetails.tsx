@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 import { request } from "./api";
+import { watchBatch } from "./events";
 import type { BatchDetails as Details } from "./api";
 
 export default function BatchDetails({ id, apiKey }: { id: string; apiKey: string }) {
@@ -10,36 +11,34 @@ export default function BatchDetails({ id, apiKey }: { id: string; apiKey: strin
   const [retrying, setRetrying] = useState<string[]>([]);
   const [retryError, setRetryError] = useState("");
   const [loading, setLoading] = useState(true);
+  const [connection, setConnection] = useState<"connecting" | "live" | "reconnecting" | "stopped">(
+    "connecting",
+  );
   const [previewErrors, setPreviewErrors] = useState<string[]>([]);
 
   useEffect(() => {
     const controller = new AbortController();
-    let timer: ReturnType<typeof setTimeout>;
-    async function load() {
-      setLoading(true);
-      try {
-        const { data } = await request<{ data: Details }>(`/batches/${id}`, apiKey, {
-          signal: controller.signal,
-        });
-        if (controller.signal.aborted) return;
-        setBatch(data);
+    void watchBatch(
+      id,
+      apiKey,
+      controller.signal,
+      (snapshot) => {
+        setBatch(snapshot);
         setError("");
+        setLoading(false);
         setPreviewErrors([]);
-        // Renew completed links before their 15-minute expiry; pending batches poll faster.
-        timer = setTimeout(() => void load(), data.status === "pending" ? 3000 : 600_000);
-      } catch (cause) {
-        if (!controller.signal.aborted) {
-          setError(cause instanceof Error ? cause.message : "Could not load batch.");
-        }
-      } finally {
-        if (!controller.signal.aborted) setLoading(false);
+      },
+      (status) => {
+        setConnection(status);
+      },
+    ).catch((cause) => {
+      if (!controller.signal.aborted) {
+        setLoading(false);
+        setConnection("stopped");
+        setError(cause instanceof Error ? cause.message : "Could not load live progress.");
       }
-    }
-    void load();
-    return () => {
-      controller.abort();
-      clearTimeout(timer);
-    };
+    });
+    return () => controller.abort();
   }, [id, apiKey, refresh]);
 
   async function retry(image: Details["images"][number]) {
@@ -212,8 +211,14 @@ export default function BatchDetails({ id, apiKey }: { id: string; apiKey: strin
         ))}
       </ul>
       <p className="mt-4 text-xs text-slate-500">
-        Pending batches update every 3 seconds. Download links expire after 15 minutes and refresh
-        automatically while this panel is open.
+        {connection === "stopped"
+          ? "Live updates unavailable."
+          : connection === "reconnecting"
+            ? "Connection lost; reconnecting…"
+            : connection === "connecting"
+              ? "Connecting to live progress…"
+              : "Live progress connected."}{" "}
+        Download links expire after 15 minutes and renew automatically while this panel is open.
       </p>
     </section>
   );

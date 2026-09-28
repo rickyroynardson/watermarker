@@ -1,6 +1,7 @@
 package httpapi_test
 
 import (
+	"bufio"
 	"crypto"
 	"crypto/rand"
 	"crypto/rsa"
@@ -20,12 +21,13 @@ import (
 	"github.com/rickyroynardson/watermarker/apps/api/internal/auth"
 	"github.com/rickyroynardson/watermarker/apps/api/internal/batch"
 	"github.com/rickyroynardson/watermarker/apps/api/internal/httpapi"
+	"github.com/rickyroynardson/watermarker/apps/api/internal/live"
 	"github.com/rickyroynardson/watermarker/apps/api/internal/storage"
 	"github.com/stretchr/testify/require"
 )
 
 // A local provider exercises real discovery, PKCE exchange, JWKS and signature validation.
-func testOIDC(t *testing.T, db *pgxpool.Pool, objects *storage.S3) {
+func testOIDC(t *testing.T, db *pgxpool.Pool, objects *storage.S3, events *live.Events) {
 	ctx := t.Context()
 	private, err := rsa.GenerateKey(rand.Reader, 2048)
 	require.NoError(t, err)
@@ -86,7 +88,7 @@ func testOIDC(t *testing.T, db *pgxpool.Pool, objects *storage.S3) {
 	const origin = "http://localhost:5173"
 	login, err := auth.NewLogin(ctx, db, issuer, "test-client", "test-secret", origin)
 	require.NoError(t, err)
-	router := httpapi.NewRouter(db, objects, login)
+	router := httpapi.NewRouter(db, objects, events, login)
 	call := func(method, path, body string, cookie *http.Cookie, originHeader, bearer string) *httptest.ResponseRecorder {
 		req := httptest.NewRequest(method, path, strings.NewReader(body))
 		req.Header.Set("Content-Type", "application/json")
@@ -191,6 +193,23 @@ func testOIDC(t *testing.T, db *pgxpool.Pool, objects *storage.S3) {
 	require.NoError(t, err)
 	defer db.Exec(ctx, "DELETE FROM batches WHERE id=$1", b.ID)
 	path := "/batches/" + b.ID.String()
+	liveServer := httptest.NewServer(router)
+	defer liveServer.Close()
+	streamRequest, err := http.NewRequestWithContext(ctx, "GET", liveServer.URL+path+"/events", nil)
+	require.NoError(t, err)
+	streamRequest.AddCookie(session)
+	streamResponse, err := (&http.Client{Timeout: 10 * time.Second}).Do(streamRequest)
+	require.NoError(t, err)
+	require.Equal(t, 200, streamResponse.StatusCode)
+	streamScanner := bufio.NewScanner(streamResponse.Body)
+	for streamScanner.Scan() {
+		if strings.HasPrefix(streamScanner.Text(), "data: ") {
+			require.Contains(t, streamScanner.Text(), b.ID.String())
+			break
+		}
+	}
+	require.NoError(t, streamScanner.Err())
+	streamResponse.Body.Close()
 	require.Equal(t, 200, call("GET", path, "", nil, "", rawKey).Code)
 	require.Equal(t, 200, call("GET", path, "", nil, "", secondKey).Code)
 	require.Equal(t, 403, call("GET", "/auth/keys", "", nil, "", rawKey).Code)

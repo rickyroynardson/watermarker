@@ -1,4 +1,18 @@
 services:
+  redis:
+    image: redis:8-alpine
+    # Pub/Sub has no stored history; disable persistence and the image's anonymous /data volume.
+    command: ["redis-server", "--save", "", "--appendonly", "no"]
+    ports:
+      - '6379:6379'
+    tmpfs:
+      - /data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
   postgres:
     image: postgres:18-alpine
     environment:

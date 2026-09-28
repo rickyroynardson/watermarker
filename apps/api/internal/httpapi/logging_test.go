@@ -19,7 +19,7 @@ func TestRequestLogOmitsSecrets(t *testing.T) {
 	request := httptest.NewRequest(http.MethodGet, "/ping?token=secret", nil)
 	request.Header.Set("Authorization", "Bearer secret")
 	response := httptest.NewRecorder()
-	NewRouter(nil, nil).ServeHTTP(response, request)
+	NewRouter(nil, nil, nil).ServeHTTP(response, request)
 	if response.Code != http.StatusOK {
 		t.Fatalf("status %d", response.Code)
 	}
@@ -41,7 +41,7 @@ func TestHTTPTraceUsesRemoteParentAndRouteTemplate(t *testing.T) {
 	defer otel.SetTracerProvider(old)
 	request := httptest.NewRequest(http.MethodGet, "/ping?token=secret", nil)
 	request.Header.Set("traceparent", "00-0123456789abcdef0123456789abcdef-0123456789abcdef-01")
-	NewRouter(nil, nil).ServeHTTP(httptest.NewRecorder(), request)
+	NewRouter(nil, nil, nil).ServeHTTP(httptest.NewRecorder(), request)
 	spans := recorder.Ended()
 	if len(spans) != 1 || spans[0].Name() != "GET /ping" || spans[0].SpanContext().TraceID().String() != "0123456789abcdef0123456789abcdef" || spans[0].Parent().SpanID().String() != "0123456789abcdef" {
 		t.Fatalf("unexpected HTTP trace: %+v", spans)

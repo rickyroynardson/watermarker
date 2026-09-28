@@ -10,7 +10,7 @@
     "lint": "oxlint --deny-warnings",
     "fmt": "oxfmt .",
     "fmt:check": "oxfmt --check .",
-    "test": "node --test src/api.test.ts",
+    "test": "node --test src/api.test.ts src/events.test.ts",
     "check": "npm run lint && npm run fmt:check && npm test && npm run build"
   },
   "dependencies": {

@@ -9,6 +9,7 @@ import (
 	"github.com/joho/godotenv"
 	"github.com/rickyroynardson/watermarker/apps/api/internal/database"
 	"github.com/rickyroynardson/watermarker/apps/api/internal/image"
+	"github.com/rickyroynardson/watermarker/apps/api/internal/live"
 	"github.com/rickyroynardson/watermarker/apps/api/internal/logger"
 	"github.com/rickyroynardson/watermarker/apps/api/internal/metrics"
 	"github.com/rickyroynardson/watermarker/apps/api/internal/outbox"
@@ -52,7 +53,12 @@ func main() {
 	if err != nil {
 		log.Fatal("configure SQS_JOBS_DLQ_QUEUE_URL", zap.Error(err))
 	}
-	handler := image.NewResultHandler(db)
+	events, err := live.FromEnv()
+	if err != nil {
+		log.Fatal("configure Redis URL", zap.Error(err))
+	}
+	defer events.Close()
+	handler := image.NewResultHandler(db, events)
 	dlqDone := make(chan struct{})
 	go func() { defer close(dlqDone); deadJobs.Consume(ctx, handler.HandleDeadJob) }()
 	log.Info("consumer started")
