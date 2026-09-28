@@ -1,0 +1,95 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  api:
+    name: Go tests
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    defaults:
+      run:
+        working-directory: apps/api
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@v6
+        with:
+          go-version: '1.27.1'
+          cache-dependency-path: apps/api/go.sum
+      - name: Check formatting
+        run: test -z "$(gofmt -l .)"
+      - name: Unit and integration tests
+        run: go test -race -count=1 -timeout=15m ./...
+
+  worker:
+    name: Python tests
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    defaults:
+      run:
+        working-directory: apps/worker
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+      - uses: astral-sh/setup-uv@v10
+        with:
+          version: '0.12.19'
+          python-version: '3.14'
+          enable-cache: true
+          cache-dependency-glob: apps/worker/uv.lock
+      - run: uv sync --locked
+      - run: uv run --frozen --offline python -m unittest discover -s tests -v
+
+  web:
+    name: Frontend checks
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    defaults:
+      run:
+        working-directory: apps/web
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v6
+        with:
+          node-version: '22'
+          cache: npm
+          cache-dependency-path: apps/web/package-lock.json
+      - run: npm ci
+      - run: npm run check
+      - name: Load script tests
+        working-directory: .
+        run: node --test scripts/load/run.test.mjs
+
+  containers:
+    name: Container smoke test
+    needs: [api, worker, web]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    env:
+      LOCALSTACK_AUTH_TOKEN: smoke-test
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v6
+        with:
+          node-version: '22'
+      - name: Build application images
+        run: docker compose -f docker-compose.yml -f docker-compose.app.yml build api worker web
+      - name: Verify complete processing flow
+        run: python3 scripts/test_container_stack.py
