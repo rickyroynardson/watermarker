@@ -2,7 +2,7 @@
 
 To run the complete application in containers, see [the container guide](../../docs/containers.md).
 
-Consumes one image job at a time from SQS, downloads the source and watermark,
+Consumes image jobs from SQS with bounded concurrency, downloads the source and watermark,
 composites them with Pillow, writes a PNG to S3, and publishes the result for the
 Go consumer. Uses Python 3.14, `boto3`, `Pillow`, and OpenTelemetry logging.
 
@@ -32,8 +32,25 @@ does not use `DATABASE_URL`.
 Keep the API and `go run ./cmd/consumer` running separately. The Go process dispatches
 the database outbox and records Python results in Postgres. `--once` processes at
 most one message and exits, which is useful for debugging or integration tests.
-SIGINT/SIGTERM stops polling after finishing the current job; an idle long poll
-can take up to 20 seconds to return.
+SIGINT/SIGTERM stops new polling and waits for active slots. Cancellation waits
+and jobs reaching a cancellation check after shutdown stay unacknowledged for
+redelivery; jobs past the final check can finish. An idle long poll can take up
+to 20 seconds to return.
+
+Set `WORKER_CONCURRENCY=2` or pass `--concurrency 2` to process up to two jobs
+in one process. The default is 1; the CLI flag overrides the environment variable.
+`--once` still processes at most one message regardless of concurrency.
+Each fixed polling thread receives one message and finishes before polling again,
+so busy slots leave excess work in SQS instead of prefetching into an unbounded
+local queue. Each active message keeps its own visibility heartbeat and retry
+handling. AWS clients and the immutable watermark cache are shared; Pillow images
+remain private to each job. The blocked-worker metric remains 1 while any slot
+is waiting for the cancellation API.
+
+Start with 2 and watch memory: the 20-million-pixel limit applies per image, not
+to the process total. More slots can overlap network I/O, but don't guarantee
+proportional CPU throughput. Multiple worker processes can still be used; two
+processes with concurrency 2 have up to four simultaneous jobs.
 
 ## Processing and delivery
 
@@ -58,7 +75,7 @@ can take up to 20 seconds to return.
   `status: failed`. Monitor the jobs DLQ for exhausted retries.
 - Refreshes the 120-second visibility timeout every 40 seconds during processing.
   Caches up to four immutable watermark downloads (at most 40 MiB of encoded data).
-  Scale by running more worker processes when needed.
+  Scale with bounded concurrency or additional worker processes when needed.
 
 AWS permissions: `s3:GetObject` on `sources/*` and `processed/*`, `s3:PutObject` on
 `processed/*`, and `s3:ListBucket` so missing output checks return 404. On the jobs
@@ -122,7 +139,7 @@ cancellation migration and restart the API before starting updated workers.
 
 Each received job checks the API before S3 work and again before writing newly
 processed output. Cancelled jobs are acknowledged without publishing results.
-API/network/authentication failures pause this worker's polling and retry the
+API/network/authentication failures pause the affected polling slot and retry the
 same check with exponential jitter (1–2 seconds initially, capped at 15–30 seconds).
 The current message stays unacknowledged and its visibility heartbeat continues.
 Recovery resumes at the failed check, including before saving output; it does not
@@ -135,7 +152,7 @@ This reduces receive-count churn, not a guarantee against DLQ delivery: process
 restarts, failed heartbeat updates, other workers and SQS's visibility limit can
 still cause redelivery. Keep outages shorter than the queue's retention and
 visibility limits. Processing duration metrics include time spent waiting on checks.
-The gauge `watermarker_worker_cancellation_blocked` is 1 while waiting, otherwise
+The gauge `watermarker_worker_cancellation_blocked` is 1 while any slot is waiting, otherwise
 0; it measures blocked workers, not proactive health checks during idle periods.
 Cancellation cannot interrupt an ongoing Pillow operation; late results remain
 blocked by the database state even if cancellation races the final worker check.

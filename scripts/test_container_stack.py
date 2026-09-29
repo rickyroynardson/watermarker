@@ -46,6 +46,9 @@ def main():
       OIDC_CLIENT_SECRET: ''
   web:
     ports: !override ['127.0.0.1::8080']
+  worker:
+    environment:
+      WORKER_CONCURRENCY: '2'
 """)
         compose = [
             "docker",
@@ -126,7 +129,7 @@ def main():
                     "--watermark",
                     "scripts/load/fixtures/watermark.png",
                     "--images",
-                    "1",
+                    "4",
                     "--workers",
                     "1",
                     "--runs",
@@ -142,7 +145,7 @@ def main():
                 capture_output=True,
             )
             result = json.loads(output.read_text())["runs"][0]
-            assert result["done"] == 1 and result["failed"] == 0
+            assert result["done"] == 4 and result["failed"] == 0
             request = urllib.request.Request(
                 origin + "/api/batches/" + result["batch_id"] + "/events",
                 headers={"Authorization": "Bearer " + token},

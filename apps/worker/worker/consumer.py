@@ -2,10 +2,11 @@
 
 import json
 import logging
+from concurrent.futures import ThreadPoolExecutor
 from contextlib import contextmanager
 from functools import lru_cache
 from random import randint
-from threading import Event, Thread
+from threading import Event, Lock, Thread
 from time import perf_counter
 
 from botocore.exceptions import ClientError
@@ -35,7 +36,12 @@ job_duration = metrics.get_meter("watermarker").create_histogram(
 
 
 class Worker:
-    def __init__(self, s3, sqs, bucket: str, jobs_url: str, results_url: str, *, is_cancelled, stop=None):
+    def __init__(self, s3, sqs, bucket: str, jobs_url: str, results_url: str, *, is_cancelled, stop=None, concurrency=1):
+        if type(concurrency) is not int or concurrency < 1:
+            raise ValueError("concurrency must be a positive integer")
+        self.concurrency = concurrency
+        self._blocked_count = 0
+        self._blocked_lock = Lock()
         self.s3, self.sqs = s3, sqs
         self.bucket, self.jobs_url, self.results_url = bucket, jobs_url, results_url
         self.is_cancelled = is_cancelled
@@ -166,26 +172,34 @@ class Worker:
         finally:
             job_duration.record(perf_counter() - start, {"outcome": outcome})
 
+    def _update_blocked(self, delta):
+        with self._blocked_lock:
+            self._blocked_count += delta
+            cancellation_blocked.set(int(self._blocked_count > 0))
+
     def skip_cancelled(self, job, message):
         retries = 0
-        while not self.stop.is_set():
-            try:
-                cancelled = self.is_cancelled(job.batch_id)
-                cancellation_blocked.set(0)
-                break
-            except CancellationUnavailable:
-                cancellation_blocked.set(1)
-                ceiling = min(30, 2 ** min(retries + 1, 5))
-                delay = randint(max(1, ceiling // 2), ceiling)
-                retries += 1
-                log.warning("cancellation API unavailable; queue polling paused", extra={"retry_delay_seconds": delay})
-                if self.stop.wait(delay):
-                    raise InterruptedError("worker stopping during cancellation check")
-            except Exception:
-                cancellation_blocked.set(0)
-                raise
-        else:
-            raise InterruptedError("worker stopping during cancellation check")
+        blocked = False
+        try:
+            while not self.stop.is_set():
+                try:
+                    cancelled = self.is_cancelled(job.batch_id)
+                    break
+                except CancellationUnavailable:
+                    if not blocked:
+                        self._update_blocked(1)
+                        blocked = True
+                    ceiling = min(30, 2 ** min(retries + 1, 5))
+                    delay = randint(max(1, ceiling // 2), ceiling)
+                    retries += 1
+                    log.warning("cancellation API unavailable; polling slot paused", extra={"retry_delay_seconds": delay})
+                    if self.stop.wait(delay):
+                        raise InterruptedError("worker stopping during cancellation check")
+            else:
+                raise InterruptedError("worker stopping during cancellation check")
+        finally:
+            if blocked:
+                self._update_blocked(-1)
         if not cancelled:
             return False
         self.sqs.delete_message(QueueUrl=self.jobs_url, ReceiptHandle=message["ReceiptHandle"])
@@ -262,10 +276,20 @@ class Worker:
 
     def run(self, stop: Event) -> None:
         self.stop = stop
-        while not stop.is_set():
-            try:
-                self.poll()
-            except Exception:
-                # Malformed jobs and transient AWS failures stay unacked for retry/DLQ.
-                log.exception("job attempt failed")
-                stop.wait(1)
+
+        def consume():
+            while not stop.is_set():
+                try:
+                    self.poll()
+                except Exception:
+                    # Malformed jobs and transient AWS failures stay unacked for retry/DLQ.
+                    log.exception("job attempt failed")
+                    stop.wait(1)
+
+        # Each slot polls only after finishing its job: no prefetched work queue.
+        with ThreadPoolExecutor(
+            max_workers=self.concurrency, thread_name_prefix="job"
+        ) as pool:
+            slots = [pool.submit(consume) for _ in range(self.concurrency)]
+            for slot in slots:
+                slot.result()
