@@ -2,7 +2,7 @@
   "uid": "watermarker-performance",
   "title": "Watermarker performance",
   "schemaVersion": 39,
-  "version": 1,
+  "version": 2,
   "refresh": "15s",
   "time": {
     "from": "now-30m",
@@ -299,6 +299,103 @@
           "unit": "short",
           "min": 0,
           "noValue": "No observations"
+        },
+        "overrides": []
+      }
+    },
+    {
+      "id": 10,
+      "title": "Active worker jobs",
+      "type": "timeseries",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "gridPos": {
+        "x": 0,
+        "y": 40,
+        "w": 8,
+        "h": 8
+      },
+      "description": "Jobs held by each worker, including cancellation waits and retry handling. Empty long polls do not occupy a job slot. Samples older than 90 seconds are hidden.",
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "max by (instance) (watermarker_worker_jobs_active{service_name=\"watermarker-worker\",deployment_environment_name=\"development\"} and (time() - timestamp(watermarker_worker_jobs_active{service_name=\"watermarker-worker\",deployment_environment_name=\"development\"}) < 90))",
+          "legendFormat": "{{instance}}"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "min": 0,
+          "noValue": "No observations",
+          "decimals": 0
+        },
+        "overrides": []
+      }
+    },
+    {
+      "id": 11,
+      "title": "Configured worker capacity",
+      "type": "timeseries",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "gridPos": {
+        "x": 8,
+        "y": 40,
+        "w": 8,
+        "h": 8
+      },
+      "description": "Maximum concurrent jobs per worker process. Samples older than 90 seconds are hidden; missing telemetry is not zero capacity.",
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "max by (instance) (watermarker_worker_capacity{service_name=\"watermarker-worker\",deployment_environment_name=\"development\"} and (time() - timestamp(watermarker_worker_capacity{service_name=\"watermarker-worker\",deployment_environment_name=\"development\"}) < 90))",
+          "legendFormat": "{{instance}}"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "min": 0,
+          "noValue": "No observations",
+          "decimals": 0
+        },
+        "overrides": []
+      }
+    },
+    {
+      "id": 12,
+      "title": "Worker slot utilization",
+      "type": "timeseries",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "gridPos": {
+        "x": 16,
+        "y": 40,
+        "w": 8,
+        "h": 8
+      },
+      "description": "Occupied job slots divided by configured capacity for each process. Includes API waits; this is slot utilization, not CPU usage. Short jobs between exports can be missed.",
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "100 * (max by (instance) (watermarker_worker_jobs_active{service_name=\"watermarker-worker\",deployment_environment_name=\"development\"} and (time() - timestamp(watermarker_worker_jobs_active{service_name=\"watermarker-worker\",deployment_environment_name=\"development\"}) < 90))) / (max by (instance) (watermarker_worker_capacity{service_name=\"watermarker-worker\",deployment_environment_name=\"development\"} and (time() - timestamp(watermarker_worker_capacity{service_name=\"watermarker-worker\",deployment_environment_name=\"development\"}) < 90)))",
+          "legendFormat": "{{instance}}"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "percent",
+          "min": 0,
+          "noValue": "No observations",
+          "decimals": 1,
+          "max": 100
         },
         "overrides": []
       }

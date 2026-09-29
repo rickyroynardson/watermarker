@@ -52,6 +52,15 @@ to the process total. More slots can overlap network I/O, but don't guarantee
 proportional CPU throughput. Multiple worker processes can still be used; two
 processes with concurrency 2 have up to four simultaneous jobs.
 
+With OTLP metrics enabled, the performance dashboard shows active jobs, configured
+capacity and slot utilization per worker instance. The gauges
+`watermarker_worker_jobs_active` and `watermarker_worker_capacity` are sampled at
+export time, including while idle. Active jobs include cancellation waits and
+retry handling, but exclude empty long polls. Utilization is active / capacity,
+not CPU usage. Short jobs between exports may not appear; use
+`OTEL_METRIC_EXPORT_INTERVAL=15000` for 15-second exports. The dashboard hides
+samples older than 90 seconds rather than displaying stopped workers as idle.
+
 ## Processing and delivery
 
 - Accepts version 1 `composite` jobs from the Go API. UUIDs and persistent source

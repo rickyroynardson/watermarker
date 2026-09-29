@@ -40,8 +40,17 @@ class Worker:
         if type(concurrency) is not int or concurrency < 1:
             raise ValueError("concurrency must be a positive integer")
         self.concurrency = concurrency
+        self._active_jobs = 0
         self._blocked_count = 0
-        self._blocked_lock = Lock()
+        self._state_lock = Lock()
+        meter = metrics.get_meter("watermarker")
+        meter.create_observable_gauge(
+            "watermarker.worker.jobs.active", callbacks=[self.observe_active_jobs],
+        )
+        meter.create_observable_gauge(
+            "watermarker.worker.capacity",
+            callbacks=[lambda _: [metrics.Observation(self.concurrency)]],
+        )
         self.s3, self.sqs = s3, sqs
         self.bucket, self.jobs_url, self.results_url = bucket, jobs_url, results_url
         self.is_cancelled = is_cancelled
@@ -49,6 +58,10 @@ class Worker:
         cancellation_blocked.set(0)
         # Cache immutable encoded watermark bytes, not mutable Pillow images (<=40 MiB).
         self.watermark = lru_cache(maxsize=4)(self.download)
+
+    def observe_active_jobs(self, _options):
+        with self._state_lock:
+            return [metrics.Observation(self._active_jobs)]
 
     def download(self, key: str) -> bytes:
         try:
@@ -173,7 +186,7 @@ class Worker:
             job_duration.record(perf_counter() - start, {"outcome": outcome})
 
     def _update_blocked(self, delta):
-        with self._blocked_lock:
+        with self._state_lock:
             self._blocked_count += delta
             cancellation_blocked.set(int(self._blocked_count > 0))
 
@@ -242,6 +255,8 @@ class Worker:
         for message in response.get("Messages", []):
             if int(message.get("Attributes", {}).get("ApproximateReceiveCount", "1")) > 1:
                 redeliveries.add(1)
+            with self._state_lock:
+                self._active_jobs += 1
             try:
                 with self.visibility_heartbeat(message["ReceiptHandle"]):
                     self.process(message)
@@ -273,6 +288,9 @@ class Worker:
                     # Leave the message unacknowledged under its existing visibility timeout.
                     log.exception("could not set job retry delay")
                 raise
+            finally:
+                with self._state_lock:
+                    self._active_jobs -= 1
 
     def run(self, stop: Event) -> None:
         self.stop = stop
