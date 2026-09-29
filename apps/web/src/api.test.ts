@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { createBatch, request, validateFiles } from "./api.ts";
+import { createBatch, RateLimitError, request, validateFiles } from "./api.ts";
 
 test("upload contract, safe batch retry, validation, and API errors", async () => {
   const originalFetch = globalThis.fetch;
@@ -119,6 +119,53 @@ test("batch polling requests respect cancellation", async () => {
     await assert.rejects(request("/batches/batch-id", "secret", { signal: controller.signal }), {
       name: "AbortError",
     });
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test("429 preserves uploaded files and the batch idempotency key on retry", async () => {
+  const originalFetch = globalThis.fetch;
+  const draft = { idempotencyKey: "rate-limit-retry", keys: ["uploads/mark", "uploads/source"] };
+  const files = [
+    new File(["mark"], "mark.png", { type: "image/png" }),
+    new File(["source"], "source.png", { type: "image/png" }),
+  ];
+  const submissions: RequestInit[] = [];
+  globalThis.fetch = async (url, init = {}) => {
+    assert.equal(url, "/api/batches", "completed uploads must not be repeated");
+    submissions.push(init);
+    if (submissions.length === 1)
+      return new Response("Too many requests", { status: 429, headers: { "Retry-After": "25" } });
+    return Response.json({ data: { id: "batch-after-cooldown" } });
+  };
+  try {
+    const before = Date.now();
+    await assert.rejects(
+      createBatch(files, "key", draft, () => {}),
+      (error: unknown) => {
+        assert.ok(error instanceof RateLimitError);
+        assert.ok(error.retryAt >= before + 25_000);
+        assert.ok(error.retryAt <= Date.now() + 25_000);
+        return true;
+      },
+    );
+    assert.equal(await createBatch(files, "key", draft, () => {}), "batch-after-cooldown");
+    assert.equal(submissions[0].body, submissions[1].body);
+    for (const submission of submissions)
+      assert.equal(new Headers(submission.headers).get("Idempotency-Key"), "rate-limit-retry");
+    for (const header of [null, "bad", "-1", "Infinity", "9999999999999999999999999"]) {
+      const started = Date.now();
+      const error = new RateLimitError(header);
+      assert.ok(error.retryAt >= started + 60_000);
+      assert.ok(error.retryAt <= Date.now() + 60_000);
+    }
+    globalThis.fetch = async () =>
+      new Response(null, { status: 429, headers: { "Retry-After": "3" } });
+    await assert.rejects(
+      createBatch(files, "key", { idempotencyKey: "partial", keys: ["uploads/mark"] }, () => {}),
+      RateLimitError,
+    );
   } finally {
     globalThis.fetch = originalFetch;
   }

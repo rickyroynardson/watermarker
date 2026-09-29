@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import AccountKeys from "./AccountKeys";
 import BatchDetails from "./BatchDetails";
-import { createBatch, request } from "./api";
+import { createBatch, RateLimitError, request } from "./api";
 import type { BatchPage, Draft } from "./api";
 
 const accept = "image/jpeg,image/png,image/webp";
@@ -16,6 +16,8 @@ export default function App() {
   const [watermark, setWatermark] = useState<File>();
   const [sources, setSources] = useState<File[]>([]);
   const [busy, setBusy] = useState(false);
+  const [retryAt, setRetryAt] = useState(0);
+  const [retrySeconds, setRetrySeconds] = useState(0);
   const [message, setMessage] = useState("");
   const [error, setError] = useState(() =>
     new URLSearchParams(window.location.search).has("auth_error")
@@ -27,6 +29,16 @@ export default function App() {
   const [page, setPage] = useState<BatchPage>();
   const [limit, setLimit] = useState("20");
   const draft = useRef<Draft | null>(null);
+
+  useEffect(() => {
+    if (!retryAt) return;
+    const timer = setInterval(() => {
+      const seconds = Math.max(0, Math.ceil((retryAt - Date.now()) / 1000));
+      setRetrySeconds(seconds);
+      if (!seconds) clearInterval(timer);
+    }, 1000);
+    return () => clearInterval(timer);
+  }, [retryAt]);
 
   useEffect(() => {
     const controller = new AbortController();
@@ -72,7 +84,12 @@ export default function App() {
       await action();
     } catch (cause) {
       setMessage("");
-      setError(cause instanceof Error ? cause.message : "Request failed. Please retry.");
+      if (cause instanceof RateLimitError) {
+        setRetryAt(cause.retryAt);
+        setRetrySeconds(Math.max(1, Math.ceil((cause.retryAt - Date.now()) / 1000)));
+      } else {
+        setError(cause instanceof Error ? cause.message : "Request failed. Please retry.");
+      }
     } finally {
       setBusy(false);
     }
@@ -169,6 +186,7 @@ export default function App() {
           className="mt-5"
           onSubmit={(event) => {
             event.preventDefault();
+            if (busy || retrySeconds > 0) return;
             void run(async () => {
               if (!watermark) throw new Error("Choose a watermark image.");
               draft.current ??= { idempotencyKey: crypto.randomUUID(), keys: [] };
@@ -217,10 +235,18 @@ export default function App() {
             )}
             <button
               type="submit"
-              disabled={!authenticated || !watermark || !sources.length || !!created}
+              disabled={
+                !authenticated || !watermark || !sources.length || !!created || retrySeconds > 0
+              }
             >
               {busy ? "Working…" : created ? "Batch created" : "Upload & create batch"}
             </button>
+            {retrySeconds > 0 && (
+              <output className="block text-sm text-amber-800">
+                Too many requests. Try again in {retrySeconds} seconds. Your completed uploads are
+                saved for retry.
+              </output>
+            )}
             <p className="text-xs text-slate-500">
               If a request fails, retry with the same files. Successful uploads are reused.
             </p>

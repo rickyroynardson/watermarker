@@ -44,6 +44,14 @@ func New(url string) (*Events, error) {
 
 func (e *Events) Close() error { return e.client.Close() }
 
+// Client shares the existing Redis connection pool with API rate limiting.
+func (e *Events) Client() *redis.Client {
+	if e == nil {
+		return nil
+	}
+	return e.client
+}
+
 // Publish follows a successful commit. A Redis outage must not turn that commit into a failed job.
 func (e *Events) Publish(ctx context.Context, id uuid.UUID) {
 	if e == nil {

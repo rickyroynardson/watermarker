@@ -17,26 +17,25 @@ def decode(data: bytes) -> Image.Image:
     if not 0 < len(data) <= MAX_BYTES:
         raise InvalidImage("image must be between 1 byte and 10 MiB")
     try:
-        with warnings.catch_warnings():
-            warnings.simplefilter("error", Image.DecompressionBombWarning)
-            # Pillow identifies the format from the bytes, not the object Content-Type.
-            with Image.open(BytesIO(data), formats=("JPEG", "PNG", "WEBP")) as image:
-                if image.width * image.height > MAX_PIXELS:
-                    raise InvalidImage("image exceeds 20 million pixels")
-                if getattr(image, "n_frames", 1) != 1:
-                    raise InvalidImage("animated images are not supported")
-                image.load()
-                oriented = ImageOps.exif_transpose(image)
-                profile = image.info.get("icc_profile")
-                if profile:
-                    rgba = ImageCms.profileToProfile(
-                        oriented, ImageCms.ImageCmsProfile(BytesIO(profile)),
-                        ImageCms.createProfile("sRGB"), outputMode="RGBA",
-                    )
-                else:
-                    rgba = oriented.convert("RGBA")
-                rgba.info.clear()  # Do not copy source EXIF or an obsolete color profile.
-                return rgba
+        # Pillow identifies the format from the bytes, not the object Content-Type.
+        # Enforce the pixel cap before loading; avoid changing warning filters across threads.
+        with Image.open(BytesIO(data), formats=("JPEG", "PNG", "WEBP")) as image:
+            if image.width * image.height > MAX_PIXELS:
+                raise InvalidImage("image exceeds 20 million pixels")
+            if getattr(image, "n_frames", 1) != 1:
+                raise InvalidImage("animated images are not supported")
+            image.load()
+            oriented = ImageOps.exif_transpose(image)
+            profile = image.info.get("icc_profile")
+            if profile:
+                rgba = ImageCms.profileToProfile(
+                    oriented, ImageCms.ImageCmsProfile(BytesIO(profile)),
+                    ImageCms.createProfile("sRGB"), outputMode="RGBA",
+                )
+            else:
+                rgba = oriented.convert("RGBA")
+            rgba.info.clear()  # Do not copy source EXIF or an obsolete color profile.
+            return rgba
     except InvalidImage:
         raise
     except (UnidentifiedImageError, OSError, ValueError, SyntaxError,

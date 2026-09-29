@@ -70,12 +70,12 @@ func NewRouter(dbpool *pgxpool.Pool, s3Storage *storage.S3, events *live.Events,
 	batches.GET("", batchHandler.ListBatches)
 	batches.GET("/:id", batchHandler.GetBatch)
 	batches.GET("/:id/events", batchEvents(dbpool, batchService, events))
-	batches.POST("", batchHandler.CreateBatch)
+	batches.POST("", rateLimit(events.Client(), 30, time.Minute), batchHandler.CreateBatch)
 	batches.POST("/:id/cancel", batchHandler.Cancel)
 	batches.POST("/:id/images/:imageID/retry", batchHandler.RetryImage)
 
 	uploadHandler := upload.NewHandler(validator, s3Storage)
-	r.POST("/uploads/presign", requireUser, uploadHandler.Presign)
+	r.POST("/uploads/presign", requireUser, rateLimit(events.Client(), 300, time.Minute), uploadHandler.Presign)
 
 	// Worker-only read endpoint; the shared token grants no batch mutation rights.
 	r.GET("/internal/batches/:id/cancellation", func(c *gin.Context) {

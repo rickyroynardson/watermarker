@@ -23,7 +23,14 @@ def main():
         action="store_true",
         help="poll once, then exit (failures exit nonzero)",
     )
+    parser.add_argument(
+        "--concurrency", type=int,
+        default=os.environ.get("WORKER_CONCURRENCY", "1"),
+        help="maximum simultaneous jobs (default: WORKER_CONCURRENCY or 1)",
+    )
     args = parser.parse_args()
+    if args.concurrency < 1:
+        parser.error("concurrency must be at least 1")
     required = (
         "S3_BUCKET",
         "SQS_JOBS_QUEUE_URL",
@@ -35,6 +42,7 @@ def main():
         if not os.environ.get(name):
             parser.error(f"{name} is required")
     config = Config(
+        max_pool_connections=max(10, args.concurrency),
         connect_timeout=5,
         read_timeout=30,
         retries={"mode": "standard", "total_max_attempts": 3},
@@ -50,13 +58,14 @@ def main():
         os.environ["SQS_JOBS_QUEUE_URL"],
         os.environ["SQS_RESULTS_QUEUE_URL"],
         stop=stop,
+        concurrency=args.concurrency,
         is_cancelled=partial(
             is_cancelled, os.environ["WORKER_API_URL"], os.environ["WORKER_API_TOKEN"]
         ),
     )
     for sig in (signal.SIGINT, signal.SIGTERM):
         signal.signal(sig, lambda *_: stop.set())
-    log.info("worker started")
+    log.info("worker started", extra={"concurrency": args.concurrency})
     if args.once:
         worker.poll()
     else:

@@ -56,7 +56,11 @@ docker compose -f docker-compose.yml -f docker-compose.app.yml up -d --scale wor
 ```
 
 Workers have no published ports or fixed container names, so Compose can start
-multiple instances. Consumer and worker stop grace periods allow in-flight work
+multiple instances. Set `WORKER_CONCURRENCY=2` in the root `.env` and recreate
+workers to allow two simultaneous jobs per instance (default 1). Three instances
+at concurrency 2 can hold up to six jobs. Start small and watch memory; image
+size limits are per job rather than a total process memory cap.
+Consumer and worker stop grace periods allow in-flight work
 and SQS long polls to finish; exceeding the grace period still causes a forced
 stop, with unacknowledged messages left for retry.
 
