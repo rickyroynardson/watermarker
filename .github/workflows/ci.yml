@@ -80,6 +80,9 @@ jobs:
     needs: [api, worker, web]
     runs-on: ubuntu-24.04
     timeout-minutes: 30
+    permissions:
+      contents: read
+      packages: write
     env:
       LOCALSTACK_AUTH_TOKEN: smoke-test
     steps:
@@ -93,3 +96,23 @@ jobs:
         run: docker compose -f docker-compose.yml -f docker-compose.app.yml build api worker web
       - name: Verify complete processing flow
         run: python3 scripts/test_container_stack.py
+      - name: Log in to GHCR
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Publish tested images
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        env:
+          REPOSITORY: ${{ github.repository }}
+          COMMIT_SHA: ${{ github.sha }}
+        run: |
+          repository=$(printf '%s' "$REPOSITORY" | tr '[:upper:]' '[:lower:]')
+          for service in api worker web; do
+            image="ghcr.io/${repository}-${service}:${COMMIT_SHA}"
+            docker tag "watermarker-${service}:local" "$image"
+            docker push "$image"
+            echo "Published \`$image\`" >> "$GITHUB_STEP_SUMMARY"
+          done
