@@ -1,8 +1,9 @@
 # Continuous integration
 
-[The CI workflow](../.github/workflows/ci.yml) runs on pushes, pull requests and
-manual runs from GitHub's Actions tab. New commits cancel older runs for the same
-branch or pull request.
+[The CI workflow](../.github/workflows/ci.yml) runs on pushes to `main`, pull
+requests and manual runs from GitHub's Actions tab. Feature branches need an open
+PR for automatic checks, avoiding duplicate push and PR runs. New commits cancel
+older runs for the same branch or pull request.
 
 Three jobs run in parallel:
 
@@ -22,6 +23,11 @@ required. Integration and smoke tests use community LocalStack. Dependencies
 are cached by the setup actions; images are built on each fresh runner.
 
 ## Image publishing
+
+GHCR publishing is currently paused: its login/push steps and `packages: write`
+permission are commented out. CI still runs all tests, image builds and the
+container smoke check. Uncomment those steps and permission to restore the
+publishing behavior described below.
 
 After all checks and the container smoke test pass on a push to `main`, the same
 container job publishes the three tested images to GitHub Container Registry
