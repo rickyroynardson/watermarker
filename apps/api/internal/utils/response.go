@@ -9,6 +9,8 @@ const (
 	CodeInvalidCursor  ErrorCode = "invalid_cursor"
 	CodeUnauthorized   ErrorCode = "unauthorized"
 	CodeInternal       ErrorCode = "internal"
+	CodeRateLimited    ErrorCode = "rate_limited"
+	CodeUnavailable    ErrorCode = "unavailable"
 )
 
 type SuccessBody struct {

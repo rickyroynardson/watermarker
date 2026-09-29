@@ -1,5 +1,26 @@
 # API
 
+## Per-user rate limits
+
+Authenticated `POST /uploads/presign` requests allow 300 admissions per minute;
+`POST /batches` allows 30. Each endpoint has a separate Redis counter keyed by
+user ID, shared across API instances and all of that user's credentials.
+Authentication runs first; authenticated invalid payloads and idempotent repeats
+also consume admissions. Exhausted budgets return `429` with error code
+`rate_limited` and a `Retry-After` header in seconds. Wait before retrying; retain
+the same idempotency key when retrying batch creation.
+
+The 60-second window starts at the first admitted request. A Lua script updates
+the counter and expiry atomically; denied requests don't extend the window.
+Redis failures return `503` (`unavailable`) on these two endpoints. Reads, SSE,
+cancellation, retries, authentication endpoints and worker checks are unaffected.
+Existing HTTP metrics include the resulting 429/503 responses.
+
+These are request-admission limits, not storage or job quotas. Signed S3 URLs
+still upload directly to S3 and may be reused while valid. Fixed windows permit
+bursts near rollover; Redis restart resets the ephemeral counters in our current
+nonpersistent setup. The limits are defined beside the routes in `router.go`.
+
 To run the complete application in containers, see [the container guide](../../docs/containers.md).
 
 Run from `apps/api` with `go run ./cmd/api`. The API loads `.env` from its

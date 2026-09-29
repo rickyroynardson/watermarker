@@ -127,6 +127,9 @@ func TestBatchAPIIntegration(t *testing.T) {
 	stopEvents, err := events.Listen(ctx)
 	require.NoError(t, err)
 	defer stopEvents()
+	t.Run("per-user rate limits across API instances", func(t *testing.T) {
+		testRateLimits(t, db, nil, redisURL)
+	})
 
 	awsContainer, err := localstack.Run(ctx, "localstack/localstack:4.14.0",
 		testcontainers.WithEnv(map[string]string{"SERVICES": "s3,sqs"}))

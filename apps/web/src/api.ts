@@ -23,6 +23,16 @@ export type BatchDetails = Batch & {
 };
 type Upload = { key: string; url: string; fields: Record<string, string> };
 
+export class RateLimitError extends Error {
+  readonly retryAt: number;
+
+  constructor(retryAfter: string | null) {
+    super("Too many requests.");
+    const seconds = retryAfter && /^\d+$/.test(retryAfter) ? Number(retryAfter) : 60;
+    this.retryAt = Date.now() + Math.max(1, Number.isSafeInteger(seconds) ? seconds : 60) * 1000;
+  }
+}
+
 export async function request<T>(path: string, apiKey = "", init: RequestInit = {}): Promise<T> {
   const headers = new Headers(init.headers);
   if (apiKey) headers.set("Authorization", `Bearer ${apiKey}`);
@@ -35,6 +45,7 @@ export async function request<T>(path: string, apiKey = "", init: RequestInit = 
       : AbortSignal.timeout(60_000),
   });
   const body = await response.json().catch(() => null);
+  if (response.status === 429) throw new RateLimitError(response.headers.get("Retry-After"));
   if (!response.ok)
     throw new Error(body?.error?.message || `Request failed (HTTP ${response.status}).`);
   if (!body) throw new Error("The API returned an empty or invalid response.");
