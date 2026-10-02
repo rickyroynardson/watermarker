@@ -78,13 +78,15 @@ class Worker:
             raise InvalidImage("image exceeds 10 MiB")
         return data
 
-    def output_exists(self, key: str) -> bool:
+    def output_size(self, key: str) -> int | None:
         try:
-            self.s3.head_object(Bucket=self.bucket, Key=key)
-            return True
+            size = self.s3.head_object(Bucket=self.bucket, Key=key)["ContentLength"]
+            if type(size) is not int or not 0 < size <= 128 * 1024 * 1024:
+                raise ValueError("invalid stored output size")
+            return size
         except ClientError as exc:
             if exc.response["Error"]["Code"] in ("NoSuchKey", "NotFound", "404"):
-                return False
+                return None
             raise
 
     def process(self, message: dict) -> None:
@@ -124,7 +126,8 @@ class Worker:
                 outcome = "cancelled"
                 return
             result = job.result()
-            if not self.output_exists(job.output_key):
+            output_size = self.output_size(job.output_key)
+            if output_size is None:
                 try:
                     with tracer.start_as_current_span(
                         "watermark",
@@ -157,6 +160,13 @@ class Worker:
                             "412",
                         ):
                             raise
+                        output_size = self.output_size(job.output_key)
+                        if output_size is None:
+                            raise RuntimeError("concurrent output disappeared")
+                    else:
+                        output_size = len(output)
+            if result["status"] == "done":
+                result["output_bytes"] = output_size
             with tracer.start_as_current_span(
                 "publish_result",
                 kind=trace.SpanKind.PRODUCER,

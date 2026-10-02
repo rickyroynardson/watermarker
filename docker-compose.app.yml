@@ -70,6 +70,7 @@ services:
       # Override host profiles imported from the optional env file.
       AWS_PROFILE: ""
       AWS_DEFAULT_PROFILE: ""
+      QUOTA_DEMO_ENABLED: ${QUOTA_DEMO_ENABLED:-true}
     restart: unless-stopped
     ports:
       - '127.0.0.1:8080:8080'

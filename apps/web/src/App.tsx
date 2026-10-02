@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import AccountKeys from "./AccountKeys";
+import AccountQuota from "./AccountQuota";
 import BatchDetails from "./BatchDetails";
 import { createBatch, RateLimitError, request } from "./api";
 import type { BatchPage, Draft } from "./api";
@@ -160,6 +161,13 @@ export default function App() {
               Your key stays in memory and is cleared on reload.
             </p>
           </fieldset>
+        )}
+        {authenticated && (
+          <AccountQuota
+            key={user?.id || apiKey.trim()}
+            apiKey={apiKey.trim()}
+            refreshKey={created}
+          />
         )}
       </section>
 

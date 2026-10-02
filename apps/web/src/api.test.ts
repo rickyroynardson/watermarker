@@ -23,6 +23,10 @@ test("upload contract, safe batch retry, validation, and API errors", async () =
   globalThis.fetch = async (url, init = {}) => {
     if (url === "/api/uploads/presign") {
       assert.equal(new Headers(init.headers).get("Authorization"), "Bearer secret");
+      assert.deepEqual(JSON.parse(init.body as string), {
+        content_type: files[presigns].type,
+        size_bytes: files[presigns].size,
+      });
       return Response.json({
         data: {
           key: `uploads/key/${++presigns}`,

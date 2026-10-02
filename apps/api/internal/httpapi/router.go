@@ -21,6 +21,7 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/rickyroynardson/watermarker/apps/api/internal/auth"
 	"github.com/rickyroynardson/watermarker/apps/api/internal/batch"
+	"github.com/rickyroynardson/watermarker/apps/api/internal/quota"
 	"github.com/rickyroynardson/watermarker/apps/api/internal/storage"
 	"github.com/rickyroynardson/watermarker/apps/api/internal/upload"
 	"github.com/rickyroynardson/watermarker/apps/api/internal/utils"
@@ -61,6 +62,7 @@ func NewRouter(dbpool *pgxpool.Pool, s3Storage *storage.S3, events *live.Events,
 	}
 	requireUser := auth.Register(r, dbpool, login)
 	validator := utils.NewValidator()
+	quota.Register(r, dbpool, requireUser)
 
 	batchRepository := batch.NewRepository(dbpool, events)
 	batchService := batch.NewService(batchRepository, s3Storage)
@@ -74,7 +76,7 @@ func NewRouter(dbpool *pgxpool.Pool, s3Storage *storage.S3, events *live.Events,
 	batches.POST("/:id/cancel", batchHandler.Cancel)
 	batches.POST("/:id/images/:imageID/retry", batchHandler.RetryImage)
 
-	uploadHandler := upload.NewHandler(validator, s3Storage)
+	uploadHandler := upload.NewHandler(validator, s3Storage, dbpool)
 	r.POST("/uploads/presign", requireUser, rateLimit(events.Client(), 300, time.Minute), uploadHandler.Presign)
 
 	// Worker-only read endpoint; the shared token grants no batch mutation rights.

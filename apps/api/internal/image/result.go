@@ -16,17 +16,21 @@ import (
 )
 
 type Result struct {
-	Attempt   int       `json:"attempt"`
-	Version   int       `json:"version"`
-	JobType   string    `json:"job_type"`
-	BatchID   uuid.UUID `json:"batch_id"`
-	ImageID   uuid.UUID `json:"image_id"`
-	Status    string    `json:"status"`
-	OutputKey string    `json:"output_key,omitempty"`
-	Error     string    `json:"error,omitempty"`
+	Attempt     int       `json:"attempt"`
+	Version     int       `json:"version"`
+	JobType     string    `json:"job_type"`
+	BatchID     uuid.UUID `json:"batch_id"`
+	ImageID     uuid.UUID `json:"image_id"`
+	Status      string    `json:"status"`
+	OutputBytes int64     `json:"output_bytes,omitempty"`
+	OutputKey   string    `json:"output_key,omitempty"`
+	Error       string    `json:"error,omitempty"`
 }
 
 func (r Result) Validate() error {
+	if r.OutputBytes < 0 || r.OutputBytes > 128*1024*1024 {
+		return errors.New("invalid output byte size")
+	}
 	if r.Attempt < 0 || r.Version != 1 || r.JobType != "composite" || r.BatchID == uuid.Nil || r.ImageID == uuid.Nil {
 		return errors.New("invalid result version, job type, or IDs")
 	}
@@ -38,7 +42,7 @@ func (r Result) Validate() error {
 			return errors.New("done result must contain its image's output key and no error")
 		}
 	case "failed":
-		if r.OutputKey != "" || strings.TrimSpace(r.Error) == "" || len(r.Error) > 4096 {
+		if r.OutputBytes != 0 || r.OutputKey != "" || strings.TrimSpace(r.Error) == "" || len(r.Error) > 4096 {
 			return errors.New("failed result must contain an error of 1-4096 bytes and no output key")
 		}
 	default:
@@ -81,6 +85,7 @@ func (h *ResultHandler) HandleDeadJob(ctx context.Context, body string) error {
 	}
 	result.Status = "failed"
 	result.OutputKey = ""
+	result.OutputBytes = 0
 	result.Error = "Automatic attempts exhausted. Check worker logs and fix the cause before retrying."
 	if err := result.Validate(); err != nil {
 		return err
@@ -96,9 +101,43 @@ func (h *ResultHandler) apply(ctx context.Context, result Result, retryable bool
 	defer tx.Rollback(ctx)
 	// Serialize result commits per batch so concurrent final images cannot miss completion.
 	// per-batch lock and image scan; use terminal counters if large batches contend.
-	var batchID uuid.UUID
-	if err := tx.QueryRow(ctx, "SELECT id FROM batches WHERE id = $1 FOR UPDATE", result.BatchID).Scan(&batchID); err != nil {
+	if _, err = tx.Exec(ctx, "SELECT pg_advisory_xact_lock_shared(823091)"); err != nil {
 		return err
+	}
+	var owner uuid.UUID
+	if err := tx.QueryRow(ctx, "SELECT user_id FROM batches WHERE id = $1 FOR UPDATE", result.BatchID).Scan(&owner); err != nil {
+		return err
+	}
+	if result.Status == "done" {
+		var exists bool
+		if err = tx.QueryRow(ctx, "SELECT EXISTS(SELECT 1 FROM images WHERE id=$1 AND batch_id=$2)", result.ImageID, result.BatchID).Scan(&exists); err != nil {
+			return err
+		}
+		if !exists {
+			return errors.New("result references an unknown image or batch")
+		}
+		// Charge an existing object even if cancellation or a stale attempt makes its result inert.
+		// Share the account lock with upload admission so concurrent uploads see the new usage.
+		if _, err = tx.Exec(ctx, "SELECT id FROM users WHERE id=$1 FOR UPDATE", owner); err != nil {
+			return err
+		}
+		// Compatibility with queued results from older workers.
+		bytes := result.OutputBytes
+		if bytes == 0 {
+			bytes = 80 * 1024 * 1024
+		}
+		_, err = tx.Exec(ctx, `INSERT INTO output_storage(key,batch_id,user_id,bytes) VALUES($1,$2,$3,$4)
+          ON CONFLICT(key) DO UPDATE SET bytes=CASE WHEN $5::bigint>0 THEN EXCLUDED.bytes ELSE output_storage.bytes END`, result.OutputKey, result.BatchID, owner, bytes, result.OutputBytes)
+		if err != nil {
+			return err
+		}
+		// A suspended worker can report an object after cleanup finished. Conservatively
+		// charge it again and repeat deletion; a delayed duplicate is safe to delete again.
+		_, err = tx.Exec(ctx, `UPDATE cleanup_objects SET deleted_at=NULL,delete_after=now()+interval '24 hours',
+          next_attempt_at=now(),last_error=NULL WHERE key=$1 AND deleted_at IS NOT NULL`, result.OutputKey)
+		if err != nil {
+			return err
+		}
 	}
 	tag, err := tx.Exec(ctx, `
 		UPDATE images SET status = $3, output_key = NULLIF($4, ''),
