@@ -1,6 +1,7 @@
 package upload
 
 import (
+	"encoding/base64"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
@@ -61,6 +62,21 @@ func TestPresign(t *testing.T) {
 		})
 	}
 
+	t.Run("declared size is enforced by the signed policy", func(t *testing.T) {
+		w := send(h, `{"content_type":"image/png","size_bytes":7}`)
+		require.Equal(t, 200, w.Code)
+		var response struct {
+			Data storage.S3Upload `json:"data"`
+		}
+		require.NoError(t, json.Unmarshal(w.Body.Bytes(), &response))
+		policy, err := base64.StdEncoding.DecodeString(response.Data.Fields["policy"])
+		require.NoError(t, err)
+		var body struct {
+			Conditions []any `json:"conditions"`
+		}
+		require.NoError(t, json.Unmarshal(policy, &body))
+		require.Contains(t, body.Conditions, []any{"content-length-range", float64(1), float64(7)})
+	})
 	for _, tt := range []struct {
 		name string
 		body string
@@ -68,6 +84,9 @@ func TestPresign(t *testing.T) {
 		{"malformed JSON", `{`},
 		{"missing content type", `{}`},
 		{"non-string content type", `{"content_type":123}`},
+		{"negative upload size", `{"content_type":"image/png","size_bytes":-1}`},
+		{"oversized upload", `{"content_type":"image/png","size_bytes":10485761}`},
+		{"fractional size", `{"content_type":"image/png","size_bytes":1.5}`},
 		{"unsupported content type", `{"content_type":"image/svg+xml"}`},
 		// Otherwise valid JSON ensures this fails only because of the body limit.
 		{"oversized body", `{"content_type":"image/png","padding":"` + strings.Repeat("x", 64*1024) + `"}`},

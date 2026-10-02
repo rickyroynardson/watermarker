@@ -67,7 +67,7 @@ export async function uploadFile(file: File, apiKey: string): Promise<string> {
   validateFiles([file]);
   const { data } = await request<{ data: Upload }>("/uploads/presign", apiKey, {
     method: "POST",
-    body: JSON.stringify({ content_type: file.type }),
+    body: JSON.stringify({ content_type: file.type, size_bytes: file.size }),
   });
   const form = new FormData();
   for (const [name, value] of Object.entries(data.fields)) form.append(name, value);

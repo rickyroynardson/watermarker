@@ -403,7 +403,7 @@ go run ./cmd/cleanup -apply -retention-days 30 -limit 100
 The command loads `.env` and prints JSON. Dry-run uses only database SELECT
 access; it never schedules or deletes anything. Apply requires database writes,
 `S3_BUCKET`, and S3 credentials with `s3:GetBucketVersioning` and
-`s3:DeleteObject` for `sources/*` and `processed/*`. It refuses buckets with
+`s3:DeleteObject` for `uploads/*`, `sources/*`, and `processed/*`. It refuses buckets with
 enabled or suspended versioning, because ordinary deletion would leave versions
 behind rather than reclaim their storage.
 
@@ -439,10 +439,11 @@ counts in Grafana. A cleanup failure lasting two minutes triggers an alert.
 Pending can include objects still in their grace period.
 
 Dry-run lists unscheduled database-tracked keys, not a verified S3 inventory.
-Missing objects, untracked partial promotions and late orphan outputs are not
-inventoried. Grace is not a distributed process fence: a suspended worker resuming
-after its final check can still leave an untracked output. No database rows,
-tombstones or staging uploads are purged by this command. The planner scans all
+Missing objects and objects whose result was never delivered are not
+inventoried. Reported outputs remain tracked even after cancellation or stale results. Grace is not a distributed process fence: a suspended worker resuming
+after its final check can still leave an untracked output. No database rows or
+tombstones are purged by this command. Abandoned staging uploads are scheduled
+through the quota reservation records. The planner scans all
 references; large inventories may require pagination and indexing.
 
 ## Live batch progress (SSE)
@@ -500,3 +501,51 @@ for very large batches.
 Production proxies must pass streaming responses immediately (disable buffering
 and caching for this endpoint) and allow timeouts beyond the heartbeat interval.
 The existing Vite `/api` proxy forwards the stream locally.
+
+### Plan allowances (demo)
+
+New accounts receive Free (100 MiB); Pro includes 1 GiB. Additional demo storage
+comes in 100 MiB blocks, capped at 10 GiB per account. This is a storage allowance,
+not monthly processing credits: there are no payments, renewals, or billing dates.
+Set `QUOTA_DEMO_ENABLED=true` on the API to show simulated purchases in the account
+UI. The local Compose application overlay defaults it to true; keep it false for
+non-demo deployments.
+
+`GET /account/quota` returns the authenticated owner's plan, included bytes,
+add-on bytes, and reserved/used input bytes. `POST /account/quota/demo` accepts
+`{"plan":"free"}` or `{"plan":"pro"}`, or `{"addon":true}` with a UUID
+`Idempotency-Key`. Reusing that key never grants the extra allowance twice.
+Plan downgrades keep existing files and prevent new uploads if usage exceeds the
+smaller allowance. API keys and browser sessions share the same account quota.
+
+`POST /uploads/presign` accepts `size_bytes` (1–10485760). PostgreSQL locks the
+account while reserving space; the signed S3 policy limits the upload to that
+size, so concurrent API instances and false size declarations cannot bypass it.
+Old clients that omit the field reserve the full 10 MiB ceiling. Source images,
+watermarks, and generated outputs count; temporary staging copies do not.
+Existing input keys are conservatively backfilled at 10 MiB per unique object
+because their sizes were not recorded. Usage combines reserved input bytes with stored output bytes, rather than
+measuring temporary staging copies in the entire bucket.
+
+Reservations remain charged on abandoned uploads or failed batch creation.
+After 24 hours without a batch reference, the existing cleanup planner schedules
+both the staging upload and any promoted orphan. Its deletion grace still applies.
+The allowance returns only after successful deletion, not when a batch expires
+or a delete is scheduled. Keep running the existing cleanup process.
+
+Generated outputs are charged by `output_bytes` in successful worker results,
+including redeliveries that reuse an existing S3 object. The result consumer
+commits the byte record with image state and locks the same account as upload
+admission. Output keys are charged once; cancelled or stale results keep stored
+objects accounted for and eligible for eventual cleanup. A stored-output report
+after a completed delete conservatively re-arms deletion and restores its charge,
+covering a suspended worker that writes late. A delayed duplicate can temporarily
+restore the charge until the idempotent deletion runs again. Existing outputs and
+old queued results without byte sizes conservatively count as 80 MiB per object;
+a later measured result replaces that estimate. Deploy the consumer migration
+and updated worker together to get actual sizes on new outputs.
+
+Outputs from already accepted jobs may take usage above the allowance. Those
+jobs complete normally, while subsequent upload admissions return `quota_exceeded`
+until cleanup reclaims space or the owner increases their allowance. This is
+storage accounting with admission enforcement, not a hard bucket capacity limit.

@@ -44,8 +44,15 @@ func NewS3(ctx context.Context, bucket string) (*S3, error) {
 	return &S3{client: client, presigner: s3.NewPresignClient(client), bucket: bucket}, nil
 }
 
-func (s *S3) PresignUpload(ctx context.Context, key, contentType string) (S3Upload, error) {
+func (s *S3) PresignUpload(ctx context.Context, key, contentType string, sizes ...int64) (S3Upload, error) {
 	const expiresIn = 900
+	maxBytes := int64(10 * 1024 * 1024)
+	if len(sizes) > 0 {
+		maxBytes = sizes[0]
+	}
+	if maxBytes < 1 || maxBytes > 10*1024*1024 {
+		return S3Upload{}, errors.New("invalid upload size")
+	}
 
 	post, err := s.presigner.PresignPostObject(ctx, &s3.PutObjectInput{
 		Bucket: aws.String(s.bucket),
@@ -54,7 +61,7 @@ func (s *S3) PresignUpload(ctx context.Context, key, contentType string) (S3Uplo
 		o.Expires = expiresIn * time.Second
 		o.Conditions = []any{
 			map[string]string{"Content-Type": contentType},
-			[]any{"content-length-range", 1, 10 * 1024 * 1024},
+			[]any{"content-length-range", 1, maxBytes},
 		}
 	})
 	if err != nil {

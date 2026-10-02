@@ -43,7 +43,7 @@ def make_worker():
     def head(**kwargs):
         if kwargs["Key"] not in objects:
             raise ClientError({"Error": {"Code": "404"}}, "HeadObject")
-        return {}
+        return {"ContentLength": len(objects[kwargs["Key"]])}
 
     def download(**kwargs):
         data = encoded()
@@ -217,7 +217,7 @@ class WorkerTests(unittest.TestCase):
         )
         self.assertEqual(worker.s3.put_object.call_args.kwargs["IfNoneMatch"], "*")
         result = json.loads(worker.sqs.send_message.call_args.kwargs["MessageBody"])
-        self.assertEqual(result, Job.parse(msg["Body"]).result())
+        self.assertEqual(result, Job.parse(msg["Body"]).result() | {"output_bytes": len(worker.s3.put_object.call_args.kwargs["Body"])})
         self.assertEqual(
             [c[0] for c in worker.sqs.mock_calls],
             ["send_message", "send_message", "delete_message"],
@@ -248,6 +248,10 @@ class WorkerTests(unittest.TestCase):
 
     def test_conditional_write_loser_still_publishes_success(self):
         worker = make_worker()
+        worker.s3.head_object.side_effect = [
+            ClientError({"Error": {"Code": "404"}}, "HeadObject"),
+            {"ContentLength": 123},
+        ]
         worker.s3.put_object.side_effect = ClientError(
             {"Error": {"Code": "PreconditionFailed"}}, "PutObject"
         )
@@ -258,6 +262,7 @@ class WorkerTests(unittest.TestCase):
             ],
             "done",
         )
+        self.assertEqual(json.loads(worker.sqs.send_message.call_args.kwargs["MessageBody"])["output_bytes"], 123)
         worker.sqs.delete_message.assert_called_once()
 
     def test_watermark_cache_and_visibility_heartbeat(self):

@@ -15,6 +15,9 @@ func TestResultValidation(t *testing.T) {
 	require.NoError(t, valid.Validate())
 	for _, mutate := range []func(*Result){
 		func(r *Result) { r.Version = 2 },
+		func(r *Result) { r.OutputBytes = -1 },
+		func(r *Result) { r.OutputBytes = 128*1024*1024 + 1 },
+		func(r *Result) { r.Status = "failed"; r.OutputKey = ""; r.Error = "invalid"; r.OutputBytes = 1 },
 		func(r *Result) { r.JobType = "extract" },
 		func(r *Result) { r.ImageID = uuid.Nil },
 		func(r *Result) { r.BatchID = uuid.Nil },
