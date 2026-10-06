@@ -40,3 +40,21 @@ variable "app_origins" {
     error_message = "Provide exact HTTPS origins without paths or trailing slashes; HTTP is allowed only for localhost."
   }
 }
+
+variable "github_plan" {
+  description = "Optional GitHub OIDC plan access. Null leaves it disabled. Subject must match the repository's exact main-branch OIDC claim."
+  type = object({
+    subject      = string
+    state_bucket = string
+    state_key    = string
+  })
+  default = null
+  validation {
+    condition = var.github_plan == null ? true : (
+      can(regex("^repo:[A-Za-z0-9_.-]+(@[0-9]+)?/[A-Za-z0-9_.-]+(@[0-9]+)?:ref:refs/heads/main$", var.github_plan.subject)) &&
+      can(regex("^[a-z0-9][a-z0-9-]{1,61}[a-z0-9]$", var.github_plan.state_bucket)) &&
+      can(regex("^[A-Za-z0-9_-]+(/[A-Za-z0-9_.-]+)*\\.tfstate$", var.github_plan.state_key))
+    )
+    error_message = "Use an exact repository main-branch subject, a bucket name, and a relative .tfstate key; wildcards are forbidden."
+  }
+}

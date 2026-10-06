@@ -110,3 +110,13 @@ delete the whole `.terraform` directory: it also contains backend configuration
 and our ignored LocalStack working copies.
 
 Reference: [Terraform provider locking](https://developer.hashicorp.com/terraform/cli/commands/providers/lock).
+
+## Optional AWS plan workflow
+
+`terraform-plan.yml` is manual-only and skips unless `AWS_PLAN_ENABLED=true`
+and the selected branch is `main`. It uses temporary GitHub OIDC credentials
+with a metadata-read/state-lock role; it cannot apply or publish images.
+No GitHub variables or AWS resources have been configured by adding the file.
+The existing CI Terraform job remains credential-free. Follow the
+[OIDC learning guide](infrastructure-github-oidc.md) for mock tests, trust-policy
+concepts, limitations, and future account setup.
