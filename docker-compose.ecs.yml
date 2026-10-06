@@ -1,0 +1,12 @@
+# Used with the base and app overlays, but only infrastructure + migrate are started.
+services:
+  localstack:
+    environment:
+      MAIN_DOCKER_NETWORK: watermarker-ecs
+      ECS_DOCKER_FLAGS: --add-host host.docker.internal:host-gateway
+      EC2_DOWNLOAD_DEFAULT_IMAGES: '0'
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+networks:
+  default:
+    name: watermarker-ecs

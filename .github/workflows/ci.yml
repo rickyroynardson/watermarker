@@ -76,6 +76,41 @@ jobs:
         working-directory: .
         run: node --test scripts/load/run.test.mjs
 
+  infrastructure:
+    name: Terraform checks
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    defaults:
+      run:
+        working-directory: infra/terraform
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+      - uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: '1.14.3'
+      - run: terraform fmt -check -recursive
+      - run: terraform init -backend=false -input=false -lockfile=readonly
+      - run: terraform validate
+      - run: terraform test
+      - run: terraform fmt -check -recursive
+        working-directory: infra/ecs-local
+      - run: terraform init -backend=false -input=false -lockfile=readonly
+        working-directory: infra/ecs-local
+      - run: terraform validate
+        working-directory: infra/ecs-local
+      - run: terraform test
+        working-directory: infra/ecs-local
+      - run: terraform fmt -check -recursive
+        working-directory: infra/state-bootstrap
+      - run: terraform init -backend=false -input=false -lockfile=readonly
+        working-directory: infra/state-bootstrap
+      - run: terraform validate
+        working-directory: infra/state-bootstrap
+      - run: terraform test
+        working-directory: infra/state-bootstrap
+
   containers:
     name: Container smoke test
     needs: [api, worker, web]

@@ -102,3 +102,6 @@ migrations, the web proxy, signed uploads, real worker processing, SSE and signe
 downloads, then removes its own resources. Existing development volumes are not
 used. This local Compose overlay is not an AWS production deployment; production
 needs its own endpoints, credentials, HTTPS and secret injection.
+
+For an ECS orchestration learning alternative, see the
+[LocalStack ECS guide](infrastructure-ecs-local.md). Use one app deployment at a time.

@@ -46,3 +46,10 @@ observability-down:
 
 observability-nuke:
 	docker compose -p watermarker-observability -f observability/docker-compose.yml down -v
+
+.PHONY: ecs-up ecs-down
+ecs-up:
+	sh scripts/ecs-local.sh up
+
+ecs-down:
+	sh scripts/ecs-local.sh down
