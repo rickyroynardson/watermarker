@@ -86,3 +86,27 @@ pull the latest changes before starting the next branch.
 Terraform configuration in `infra/terraform` also runs formatting, initialization,
 validation, and provider-mocked tests in CI. This job uses no AWS credentials and
 never applies resources to AWS. See the [infrastructure guide](../infra/terraform/README.md).
+
+## Provider checksums across Mac and CI
+
+CI initializes providers with `-lockfile=readonly`. Commit verified unpacked
+package (`h1:`) checksums for both `darwin_arm64` (Apple Silicon development)
+and `linux_amd64` (GitHub's Ubuntu runner). The official archive (`zh:`) hashes
+can verify a download, but read-only initialization cannot add a missing platform's
+unpacked checksum before validation checks the cached package.
+
+When intentionally updating a provider, run this for each Terraform root:
+
+```sh
+terraform -chdir=infra/terraform providers lock -platform=darwin_arm64 -platform=linux_amd64
+terraform -chdir=infra/ecs-local providers lock -platform=darwin_arm64 -platform=linux_amd64
+terraform -chdir=infra/state-bootstrap providers lock -platform=darwin_arm64 -platform=linux_amd64
+```
+
+Review and commit the lock-file changes. Keep checksum verification enabled;
+provider caches and state files stay uncommitted. If a correctly locked package
+is damaged, remove only the affected provider cache and initialize again. Do not
+delete the whole `.terraform` directory: it also contains backend configuration
+and our ignored LocalStack working copies.
+
+Reference: [Terraform provider locking](https://developer.hashicorp.com/terraform/cli/commands/providers/lock).
