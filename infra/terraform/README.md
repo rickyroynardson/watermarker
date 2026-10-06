@@ -14,6 +14,8 @@ covers image publishing, role separation, LocalStack tests, and exercises.
 This AWS root does not deploy containers or a load balancer.
 For secret population, permissions, and injection, read the
 [secrets learning guide](../../docs/infrastructure-secrets.md).
+For the optional GitHub OIDC plan role and disabled manual workflow, read the
+[GitHub identity learning guide](../../docs/infrastructure-github-oidc.md).
 For actual local container execution, see the separate
 [LocalStack ECS setup](../../docs/infrastructure-ecs-local.md).
 

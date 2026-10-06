@@ -1,0 +1,91 @@
+name: AWS Terraform plan
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: aws-terraform-plan
+  cancel-in-progress: false
+
+jobs:
+  plan:
+    # No credentials or AWS calls until the repository owner opts in.
+    if: vars.AWS_PLAN_ENABLED == 'true' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    permissions:
+      contents: read
+      id-token: write
+    defaults:
+      run:
+        working-directory: infra/terraform
+    env:
+      AWS_ACCOUNT_ID: ${{ vars.AWS_ACCOUNT_ID }}
+      AWS_REGION: ${{ vars.AWS_REGION }}
+      AWS_PLAN_ROLE_ARN: ${{ vars.AWS_PLAN_ROLE_ARN }}
+      TF_STATE_BUCKET: ${{ vars.TF_STATE_BUCKET }}
+      TF_STATE_KEY: ${{ vars.TF_STATE_KEY }}
+      TF_NAME_PREFIX: ${{ vars.TF_NAME_PREFIX }}
+      TF_IMAGE_BUCKET: ${{ vars.TF_IMAGE_BUCKET }}
+      TF_APP_ORIGINS: ${{ vars.TF_APP_ORIGINS }}
+      GITHUB_OIDC_SUBJECT: ${{ vars.GITHUB_OIDC_SUBJECT }}
+      TF_IN_AUTOMATION: 'true'
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+      - name: Prepare non-secret Terraform configuration
+        run: |
+          python3 - <<'PY'
+          import json
+          import os
+          import pathlib
+          import re
+
+          names = ['AWS_ACCOUNT_ID', 'AWS_REGION', 'AWS_PLAN_ROLE_ARN',
+                   'TF_STATE_BUCKET', 'TF_STATE_KEY', 'TF_NAME_PREFIX',
+                   'TF_IMAGE_BUCKET', 'TF_APP_ORIGINS', 'GITHUB_OIDC_SUBJECT']
+          missing = [name for name in names if not os.environ.get(name)]
+          if missing:
+              raise SystemExit('Missing repository variables: ' + ', '.join(missing))
+          e = os.environ
+          if not re.fullmatch(r'[0-9]{12}', e['AWS_ACCOUNT_ID']):
+              raise SystemExit('Invalid AWS_ACCOUNT_ID')
+          if not e['AWS_PLAN_ROLE_ARN'].startswith('arn:aws:iam::' + e['AWS_ACCOUNT_ID'] + ':role/'):
+              raise SystemExit('Plan role must belong to the configured account')
+          origins = json.loads(e['TF_APP_ORIGINS'])
+          if not isinstance(origins, list) or not all(isinstance(x, str) for x in origins):
+              raise SystemExit('TF_APP_ORIGINS must be a JSON array of origins')
+          pathlib.Path('ci.auto.tfvars.json').write_text(json.dumps({
+              'aws_account_id': e['AWS_ACCOUNT_ID'], 'aws_region': e['AWS_REGION'],
+              'name_prefix': e['TF_NAME_PREFIX'], 'bucket_name': e['TF_IMAGE_BUCKET'],
+              'app_origins': origins,
+              'github_plan': {'subject': e['GITHUB_OIDC_SUBJECT'],
+                              'state_bucket': e['TF_STATE_BUCKET'], 'state_key': e['TF_STATE_KEY']}
+          }))
+          # JSON is also valid Terraform backend configuration syntax.
+          pathlib.Path('ci.tfbackend.json').write_text(json.dumps({
+              'bucket': e['TF_STATE_BUCKET'], 'key': e['TF_STATE_KEY'],
+              'region': e['AWS_REGION'], 'encrypt': True, 'use_lockfile': True,
+              'allowed_account_ids': [e['AWS_ACCOUNT_ID']]
+          }))
+          PY
+      - uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: '1.14.3'
+      - run: terraform fmt -check -recursive
+      - name: Authenticate using GitHub OIDC
+        uses: aws-actions/configure-aws-credentials@v6.3.0
+        with:
+          role-to-assume: ${{ vars.AWS_PLAN_ROLE_ARN }}
+          aws-region: ${{ vars.AWS_REGION }}
+          allowed-account-ids: ${{ vars.AWS_ACCOUNT_ID }}
+          role-session-name: terraform-plan-${{ github.run_id }}
+          role-duration-seconds: 900
+      - run: terraform init -input=false -lockfile=readonly -backend-config=ci.tfbackend.json
+      - run: terraform validate
+      - name: Plan only
+        run: terraform plan -input=false -lock-timeout=60s -no-color

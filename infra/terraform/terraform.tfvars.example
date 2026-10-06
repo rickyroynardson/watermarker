@@ -4,3 +4,11 @@ aws_region     = "us-east-1"
 name_prefix    = "watermarker-dev"
 bucket_name    = "watermarker-dev-replace-me"
 app_origins    = ["http://localhost:5173", "http://127.0.0.1:5173"]
+
+# Optional: leave omitted until you have AWS and have verified your exact OIDC sub.
+# Repositories using immutable IDs require OWNER@ID/REPO@ID in the subject.
+# github_plan = {
+#   subject      = "repo:rickyroynardson/watermarker:ref:refs/heads/main"
+#   state_bucket = "watermarker-state-replace-me"
+#   state_key    = "environments/dev/terraform.tfstate"
+# }
