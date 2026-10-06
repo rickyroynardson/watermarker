@@ -28,6 +28,14 @@ working directory; add the AWS settings from the root `.env.example` to
 `apps/api/.env` alongside `DATABASE_URL` and `REDIS_URL` (defaults to `redis://localhost:6379/0`). Start infrastructure with `make up`
 and apply migrations with `make migrate-up` from the repository root.
 
+Database pool settings can be supplied as native `pool_*` options in
+`DATABASE_URL`; explicit values override the application defaults of 25 maximum
+and 5 minimum connections. For example, append
+`&pool_max_conns=10&pool_min_conns=2` to a URL that already has query parameters.
+The API, consumer, monitor, and cleanup each own their own pool. See the
+[pool configuration guide](../../docs/database-pool-configuration.md) for URL/DSN
+examples, duration settings, validation, and connection budgeting.
+
 For AWS, set `S3_BUCKET` and `AWS_REGION`, remove the LocalStack endpoint and
 test credentials, and use the SDK's standard credential chain. The signing
 principal needs `s3:GetObject` on `processed/*` for previews/downloads,

@@ -93,7 +93,9 @@ After a stopped process's series becomes stale, it disappears from current queri
 
 ## Why more connections are not always the answer
 
-Our shared `database.ConnectPgx` currently sets MaxConns to 25 and MinConns to 5.
+Our shared `database.ConnectPgx` defaults to MaxConns 25 and MinConns 5. Explicit
+native `pool_*` options in DATABASE_URL override those defaults; see the
+[pool configuration guide](database-pool-configuration.md).
 The API, consumer, and monitor each own a separate pool. Replicas multiply the
 potential connections, and other clients need capacity too. Compare the total
 budget with PostgreSQL's connection limit before increasing pool sizes.
@@ -104,8 +106,9 @@ A slow query or long-held transaction can occupy connections and cause more
 requests to queue in the application. Use these metrics together with the
 [lock contention lab](database-lock-contention.md) and database blocker query.
 
-The runtime change is observation only: pool size, transaction logic, quota
-checks, request deadlines, and retry behavior remain unchanged.
+The pool metrics change is observation only. Pool configuration now honors explicit
+settings in DATABASE_URL, but omitted options retain the previous defaults.
+Transaction logic, quota checks, request deadlines, and retry behavior are unchanged.
 
 ## Verify without running the app stack
 
@@ -131,3 +134,5 @@ needed. The test does not impose its one-connection limit on the application.
 - Explain why averaging all API replicas' utilization could hide one busy replica.
 - Compare query optimization, shortening transactions, and pool resizing before
   deciding how to respond to observed pressure.
+
+Next on the same database topic: [live transaction and lock monitoring](database-activity-observability.md).

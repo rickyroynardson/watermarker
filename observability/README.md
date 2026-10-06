@@ -115,6 +115,12 @@ each API, consumer, and monitor instance. These are local pool statistics, not
 database-wide counts or SQL duration. See the
 [pool observability learning guide](../docs/database-pool-observability.md).
 
+The monitor also samples blocked/blocking client sessions, idle open transactions,
+and oldest open transaction age. The metrics dashboard hides failed or stale
+database observations. See the
+[database activity guide](../docs/database-activity-observability.md) for permissions,
+a controlled row-lock experiment, and verification commands.
+
 If every metrics panel shows no data, run `python3 observability/smoke.py`.
 The Prometheus service must keep `--web.enable-otlp-receiver`; without it the
 Collector receives HTTP 404 and drops metrics. After changing Compose commands,

@@ -2,7 +2,7 @@
   "uid": "watermarker-metrics",
   "title": "Watermarker metrics",
   "schemaVersion": 39,
-  "version": 2,
+  "version": 3,
   "refresh": "15s",
   "time": {
     "from": "now-1h",
@@ -455,6 +455,99 @@
         "overrides": []
       },
       "description": "Mean accumulated wait time / successful waiting acquisitions. Includes connection construction waits. Canceled waits are excluded; not SQL latency or a percentile. No successful waiting acquisitions means no value."
+    },
+    {
+      "id": 15,
+      "title": "Database blocked and blocking sessions",
+      "type": "timeseries",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "gridPos": {
+        "x": 0,
+        "y": 53,
+        "w": 8,
+        "h": 8
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "max by (deployment_environment_name, state) (watermarker_db_lock_sessions and on (instance, source, deployment_environment_name) ((watermarker_backlog_observation_success{source=\"database\"} == 1) and on (instance, source, deployment_environment_name) (time() - watermarker_backlog_observation_time_seconds{source=\"database\"} < 90)))",
+          "legendFormat": "{{deployment_environment_name}} {{state}}"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "min": 0,
+          "noValue": "No fresh successful observation"
+        },
+        "overrides": []
+      },
+      "description": "Client sessions waiting on Lock events and distinct positive blocker PIDs. One blocker can block multiple sessions. Sampled across the current database; excludes the monitoring query. Failed or more than 90-second-old observations are hidden, never replaced with zero. Multiple monitor replicas use max, not sum; assumes one shared database per environment."
+    },
+    {
+      "id": 16,
+      "title": "Database idle open transactions",
+      "type": "timeseries",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "gridPos": {
+        "x": 8,
+        "y": 53,
+        "w": 8,
+        "h": 8
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "max by (deployment_environment_name) (watermarker_db_transaction_idle and on (instance, source, deployment_environment_name) ((watermarker_backlog_observation_success{source=\"database\"} == 1) and on (instance, source, deployment_environment_name) (time() - watermarker_backlog_observation_time_seconds{source=\"database\"} < 90)))",
+          "legendFormat": "{{deployment_environment_name}}"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "min": 0,
+          "noValue": "No fresh successful observation"
+        },
+        "overrides": []
+      },
+      "description": "Client sessions idle inside a transaction, including aborted transactions. A pooled idle connection with no open transaction is excluded. Failed or more than 90-second-old observations are hidden, never replaced with zero. Multiple monitor replicas use max, not sum; assumes one shared database per environment."
+    },
+    {
+      "id": 17,
+      "title": "Database oldest open transaction",
+      "type": "timeseries",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "gridPos": {
+        "x": 16,
+        "y": 53,
+        "w": 8,
+        "h": 8
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "max by (deployment_environment_name) (watermarker_db_transaction_oldest_age_seconds and on (instance, source, deployment_environment_name) ((watermarker_backlog_observation_success{source=\"database\"} == 1) and on (instance, source, deployment_environment_name) (time() - watermarker_backlog_observation_time_seconds{source=\"database\"} < 90)))",
+          "legendFormat": "{{deployment_environment_name}}"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "s",
+          "min": 0,
+          "noValue": "No fresh successful observation"
+        },
+        "overrides": []
+      },
+      "description": "Age of the oldest open client transaction, including active and idle transactions. Not a completed-transaction percentile or proof that this transaction is blocking anyone. Failed or more than 90-second-old observations are hidden, never replaced with zero. Multiple monitor replicas use max, not sum; assumes one shared database per environment."
     }
   ]
 }

@@ -6,6 +6,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/rickyroynardson/watermarker/apps/api/internal/database"
+
 	"go.opentelemetry.io/otel"
 	sdkmetric "go.opentelemetry.io/otel/sdk/metric"
 	"go.opentelemetry.io/otel/sdk/metric/metricdata"
@@ -60,6 +62,7 @@ func TestMeasurements(t *testing.T) {
 	OutboxBacklog(context.Background(), 2, 120)
 	BacklogObservation(context.Background(), "jobs", nil)
 	BacklogObservation(context.Background(), "outbox", errors.New("database unavailable"))
+	DatabaseActivity(context.Background(), database.Activity{Blocked: 3, Blocking: 1, IdleTransactions: 2, OldestTransactionSeconds: 12.5})
 	data = metricdata.ResourceMetrics{}
 	if err := reader.Collect(context.Background(), &data); err != nil {
 		t.Fatal(err)
@@ -68,6 +71,29 @@ func TestMeasurements(t *testing.T) {
 	for _, scope := range data.ScopeMetrics {
 		for _, m := range scope.Metrics {
 			switch m.Name {
+			case "watermarker.db.lock.sessions":
+				points := m.Data.(metricdata.Gauge[int64]).DataPoints
+				if len(points) != 2 {
+					t.Fatal(points)
+				}
+				for _, point := range points {
+					state, _ := point.Attributes.Value("state")
+					source, _ := point.Attributes.Value("source")
+					if source.AsString() != "database" || point.Value != map[string]int64{"blocked": 3, "blocking": 1}[state.AsString()] {
+						t.Fatal(point)
+					}
+				}
+				gauges++
+			case "watermarker.db.transaction.idle":
+				if m.Data.(metricdata.Gauge[int64]).DataPoints[0].Value != 2 {
+					t.Fatal(m)
+				}
+				gauges++
+			case "watermarker.db.transaction.oldest.age":
+				if m.Data.(metricdata.Gauge[float64]).DataPoints[0].Value != 12.5 {
+					t.Fatal(m)
+				}
+				gauges++
 			case "watermarker.images.completed":
 				points := m.Data.(metricdata.Sum[int64]).DataPoints
 				if len(points) != 1 || points[0].Value != 1 {
@@ -121,7 +147,7 @@ func TestMeasurements(t *testing.T) {
 			}
 		}
 	}
-	if gauges != 5 {
+	if gauges != 8 {
 		t.Fatalf("got %d backlog gauges", gauges)
 	}
 }

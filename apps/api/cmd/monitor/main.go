@@ -99,6 +99,15 @@ func main() {
 		} else {
 			metrics.CleanupObjects(ctx, counts)
 		}
+		pollCtx, cancel = context.WithTimeout(ctx, 3*time.Second)
+		activity, err := database.ObserveActivity(pollCtx, db)
+		cancel()
+		metrics.BacklogObservation(ctx, "database", err)
+		if err != nil {
+			log.Warn("observe database activity", zap.Error(err))
+		} else {
+			metrics.DatabaseActivity(ctx, activity)
+		}
 		select {
 		case <-ctx.Done():
 			return
