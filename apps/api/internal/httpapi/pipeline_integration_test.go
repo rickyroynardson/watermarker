@@ -118,6 +118,77 @@ func testPipeline(t *testing.T, ctx context.Context, originalDB *pgxpool.Pool, s
 		require.Zero(t, n)
 	})
 
+	t.Run("cleanup claims skip locked objects and preserve eligibility", func(t *testing.T) {
+		claimCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
+		defer cancel()
+		prefix := "sources/" + owner.String() + "/cleanup-" + uuid.NewString() + "-"
+		keys := []string{prefix + "a", prefix + "b", prefix + "0-grace", prefix + "0-retry", prefix + "0-deleted"}
+		_, err := db.Exec(ctx, `INSERT INTO cleanup_objects(key,delete_after,next_attempt_at)
+ SELECT key,now()-interval '1 day',now()-interval '1 hour' FROM unnest($1::text[]) key`, keys)
+		require.NoError(t, err)
+		t.Cleanup(func() {
+			_, err := db.Exec(ctx, "DELETE FROM cleanup_objects WHERE key=ANY($1)", keys)
+			require.NoError(t, err)
+		})
+		_, err = db.Exec(ctx, "UPDATE cleanup_objects SET delete_after=now()+interval '1 day' WHERE key=$1", keys[2])
+		require.NoError(t, err)
+		_, err = db.Exec(ctx, "UPDATE cleanup_objects SET next_attempt_at=now()+interval '1 day' WHERE key=$1", keys[3])
+		require.NoError(t, err)
+		_, err = db.Exec(ctx, "UPDATE cleanup_objects SET deleted_at=now() WHERE key=$1", keys[4])
+		require.NoError(t, err)
+
+		started, finished := make(chan string, 1), make(chan error, 1)
+		release, exited := make(chan struct{}), make(chan struct{})
+		var once sync.Once
+		unlock := func() { once.Do(func() { close(release) }) }
+		defer func() {
+			unlock()
+			select {
+			case <-exited:
+			case <-time.After(6 * time.Second):
+				t.Error("first cleanup did not exit")
+			}
+		}()
+		go func() {
+			defer close(exited)
+			attempted, err := cleanup.DeleteOne(claimCtx, db, func(ctx context.Context, key string) error {
+				started <- key // Keep the row locked while pretending S3 is busy.
+				select {
+				case <-release:
+					return nil
+				case <-ctx.Done():
+					return ctx.Err()
+				}
+			})
+			if !attempted && err == nil {
+				err = errors.New("first cleanup did not claim an object")
+			}
+			finished <- err
+		}()
+		select {
+		case key := <-started:
+			require.Equal(t, keys[0], key)
+		case <-claimCtx.Done():
+			t.Fatal("first cleanup never reached deletion")
+		}
+		// A separate pool represents another cleanup instance and must not wait for A.
+		secondCtx, stop := context.WithTimeout(claimCtx, 2*time.Second)
+		defer stop()
+		var secondKey string
+		attempted, err := cleanup.DeleteOne(secondCtx, originalDB, func(_ context.Context, key string) error { secondKey = key; return nil })
+		require.NoError(t, err)
+		require.True(t, attempted)
+		require.Equal(t, keys[1], secondKey)
+		attempted, err = cleanup.DeleteOne(secondCtx, originalDB, func(context.Context, string) error { return errors.New("locked or ineligible object was claimed") })
+		require.NoError(t, err)
+		require.False(t, attempted, "only A remains due, and it is locked")
+		unlock()
+		require.NoError(t, <-finished)
+		var completed int
+		require.NoError(t, db.QueryRow(ctx, "SELECT count(*) FROM cleanup_objects WHERE key=ANY($1) AND deleted_at IS NOT NULL AND attempts=1", keys[:2]).Scan(&completed))
+		require.Equal(t, 2, completed)
+	})
+
 	t.Run("cleanup waits for in-flight source promotion", func(t *testing.T) {
 		old, err := repo.CreateBatch(ctx, newBatch())
 		require.NoError(t, err)

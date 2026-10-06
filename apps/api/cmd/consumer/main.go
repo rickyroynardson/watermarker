@@ -39,6 +39,8 @@ func main() {
 		log.Fatal("configure database", zap.Error(err))
 	}
 	defer db.Close()
+	stopPoolMetrics := metrics.DatabasePool(db)
+	defer stopPoolMetrics()
 	if err := db.Ping(ctx); err != nil {
 		log.Fatal("ping database", zap.Error(err))
 	}

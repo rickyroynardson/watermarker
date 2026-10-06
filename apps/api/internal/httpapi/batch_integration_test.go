@@ -206,6 +206,55 @@ func TestBatchAPIIntegration(t *testing.T) {
 		return id, token
 	}
 	t.Run("OIDC sign-in and user ownership", func(t *testing.T) { testOIDC(t, db, objects, events) })
+	t.Run("history cursor ties and ownership under generic plans", func(t *testing.T) {
+		pageOwner, pageToken := seedKey()
+		foreignOwner, _ := seedKey()
+		// The pool has one connection, so this setting applies to subsequent requests.
+		_, err := db.Exec(ctx, "SET plan_cache_mode = force_generic_plan")
+		require.NoError(t, err)
+		defer func() {
+			_, err := db.Exec(ctx, "RESET plan_cache_mode")
+			require.NoError(t, err)
+		}()
+		var expected []uuid.UUID
+		for n := 1; n <= 7; n++ {
+			id := uuid.UUID{15: byte(n)}
+			_, err := db.Exec(ctx, `INSERT INTO batches(id,user_id,watermark_key,created_at)
+ VALUES($1,$2,'sources/history-test',timestamptz '2026-01-01 00:00:00+00' + $3::int * interval '1 second')`, id, pageOwner, (n-1)/3)
+			require.NoError(t, err)
+			expected = append(expected, id)
+		}
+		_, err = db.Exec(ctx, "INSERT INTO batches(id,user_id,watermark_key) VALUES($1,$2,'sources/foreign-history')", uuid.New(), foreignOwner)
+		require.NoError(t, err)
+		slices.Reverse(expected)
+		var got []uuid.UUID
+		path := "/batches?limit=2"
+		for page := 0; page < 4; page++ {
+			response := request(http.MethodGet, path, pageToken, "", "")
+			require.Equal(t, http.StatusOK, response.Code, response.Body.String())
+			var body struct {
+				Data batch.ListBatchesResponse `json:"data"`
+			}
+			require.NoError(t, json.Unmarshal(response.Body.Bytes(), &body))
+			for _, item := range body.Data.Batches {
+				got = append(got, item.ID)
+			}
+			if page == 3 {
+				require.Len(t, body.Data.Batches, 1)
+				require.Nil(t, body.Data.NextCursor)
+			} else {
+				require.Len(t, body.Data.Batches, 2)
+				require.NotNil(t, body.Data.NextCursor)
+				path = "/batches?limit=2&cursor=" + url.QueryEscape(*body.Data.NextCursor)
+			}
+			if page == 0 {
+				// Newer rows inserted between pages must not duplicate/shift older pages.
+				_, err := db.Exec(ctx, "INSERT INTO batches(id,user_id,watermark_key) VALUES($1,$2,'sources/new-history')", uuid.New(), pageOwner)
+				require.NoError(t, err)
+			}
+		}
+		require.Equal(t, expected, got, "all original rows exactly once, ties ordered by ID, no other user's rows")
+	})
 	owner, token := seedKey()
 	_, otherToken := seedKey()
 	revokedID, revokedToken := seedKey()

@@ -22,6 +22,81 @@ import (
 
 func testQuotas(t *testing.T, db *pgxpool.Pool, redisURL string) {
 	t.Helper()
+	t.Run("deletion states preserve usage", func(t *testing.T) {
+		ctx := t.Context()
+		owner, token := uuid.New(), uuid.NewString()
+		_, err := db.Exec(ctx, "INSERT INTO users(id) VALUES($1)", owner)
+		require.NoError(t, err)
+		_, err = db.Exec(ctx, "INSERT INTO api_keys(id,user_id,name,key_hash) VALUES($1,$2,'accounting',encode(sha256($3::bytea),'hex'))", uuid.New(), owner, token)
+		require.NoError(t, err)
+		defer func() {
+			_, err := db.Exec(ctx, "DELETE FROM batches WHERE user_id=$1", owner)
+			require.NoError(t, err)
+			_, err = db.Exec(ctx, "DELETE FROM cleanup_objects WHERE key LIKE $1 OR key LIKE $2", "sources/"+owner.String()+"/%", "uploads/"+owner.String()+"/%")
+			require.NoError(t, err)
+			_, err = db.Exec(ctx, "DELETE FROM upload_reservations WHERE user_id=$1", owner)
+			require.NoError(t, err)
+		}()
+		router := httpapi.NewRouter(db, nil, nil)
+		read := func() int64 {
+			r := httptest.NewRequest("GET", "/account/quota", nil)
+			r.Header.Set("Authorization", "Bearer "+token)
+			w := httptest.NewRecorder()
+			router.ServeHTTP(w, r)
+			require.Equal(t, 200, w.Code, w.Body.String())
+			var body struct {
+				Data quota.Account `json:"data"`
+			}
+			require.NoError(t, json.Unmarshal(w.Body.Bytes(), &body))
+			return body.Data.Used
+		}
+		require.Zero(t, read(), "empty account must have zero usage")
+		var expected int64
+		for _, state := range []struct {
+			name                                       string
+			reference                                  string
+			persistentDeleted, stagingDeleted, pending bool
+			charged                                    bool
+		}{
+			{name: "active", charged: true},
+			{name: "scheduled or failed", pending: true, charged: true},
+			{name: "abandoned persistent only", persistentDeleted: true, charged: true},
+			{name: "abandoned staging only", stagingDeleted: true, charged: true},
+			{name: "abandoned both deleted", persistentDeleted: true, stagingDeleted: true},
+			{name: "watermark deleted", reference: "watermark", persistentDeleted: true},
+			{name: "image source deleted", reference: "image", persistentDeleted: true},
+			{name: "referenced scheduled", reference: "watermark", pending: true, stagingDeleted: true, charged: true},
+		} {
+			t.Run(state.name, func(t *testing.T) {
+				key := "sources/" + owner.String() + "/" + uuid.NewString()
+				require.NoError(t, quota.Reserve(ctx, db, owner, key, 100))
+				if state.reference != "" {
+					batchID, watermark := uuid.New(), key
+					if state.reference == "image" {
+						watermark = "sources/" + owner.String() + "/" + uuid.NewString()
+					}
+					_, err := db.Exec(ctx, "INSERT INTO batches(id,user_id,watermark_key) VALUES($1,$2,$3)", batchID, owner, watermark)
+					require.NoError(t, err)
+					if state.reference == "image" {
+						_, err = db.Exec(ctx, "INSERT INTO images(id,batch_id,source_key) VALUES($1,$2,$3)", uuid.New(), batchID, key)
+						require.NoError(t, err)
+					}
+				}
+				if state.persistentDeleted || state.pending {
+					_, err := db.Exec(ctx, "INSERT INTO cleanup_objects(key,deleted_at,last_error) VALUES($1,CASE WHEN $2 THEN now() ELSE NULL END,CASE WHEN $2 THEN NULL ELSE 'S3 unavailable' END)", key, state.persistentDeleted)
+					require.NoError(t, err)
+				}
+				if state.stagingDeleted {
+					_, err := db.Exec(ctx, "INSERT INTO cleanup_objects(key,deleted_at) VALUES($1,now())", strings.Replace(key, "sources/", "uploads/", 1))
+					require.NoError(t, err)
+				}
+				if state.charged {
+					expected += 100
+				}
+				require.Equal(t, expected, read())
+			})
+		}
+	})
 	ctx := t.Context()
 	owner := uuid.New()
 	_, err := db.Exec(ctx, "INSERT INTO users(id) VALUES($1)", owner)

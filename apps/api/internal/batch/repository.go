@@ -25,17 +25,22 @@ func NewRepository(db *pgxpool.Pool, events ...*live.Events) *BatchRepository {
 }
 
 func (r *BatchRepository) ListBatches(ctx context.Context, userID uuid.UUID, before, beforeID any, limit int) ([]ListBatchItem, error) {
-	const q = `
+	q := `
 		SELECT id, watermark_key, created_at, completed_at, expired_at,
  EXTRACT(EPOCH FROM (completed_at - created_at))::double precision AS duration_seconds
 		FROM batches
 		WHERE user_id = $1
-			AND ($2::timestamptz IS NULL OR (created_at, id) < ($2, $3::uuid))
-		ORDER BY created_at DESC, id DESC
-		LIMIT $4
 	`
+	args := []any{userID, limit}
+	if before != nil {
+		// Separate query shapes keep the cursor in Index Cond even with generic
+		// prepared plans; a nullable OR can scan/filter every preceding row.
+		q += " AND (created_at, id) < ($3::timestamptz, $4::uuid)"
+		args = append(args, before, beforeID)
+	}
+	q += " ORDER BY created_at DESC, id DESC LIMIT $2"
 
-	rows, err := r.dbpool.Query(ctx, q, userID, before, beforeID, limit)
+	rows, err := r.dbpool.Query(ctx, q, args...)
 	if err != nil {
 		return nil, err
 	}

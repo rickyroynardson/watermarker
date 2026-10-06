@@ -109,6 +109,12 @@ process instance distinguish replicas. Image/batch IDs and error text are never 
 No endpoint means metrics are disabled. Normal shutdown flushes metrics; crashes can
 lose measurements since the last export. This is operational telemetry, not accounting.
 
+The metrics dashboard also shows database pool utilization, connection states,
+successful acquisition waits, cancellations, and mean successful wait time for
+each API, consumer, and monitor instance. These are local pool statistics, not
+database-wide counts or SQL duration. See the
+[pool observability learning guide](../docs/database-pool-observability.md).
+
 If every metrics panel shows no data, run `python3 observability/smoke.py`.
 The Prometheus service must keep `--web.enable-otlp-receiver`; without it the
 Collector receives HTTP 404 and drops metrics. After changing Compose commands,

@@ -54,6 +54,8 @@ func main() {
 	}
 	shutdownMetrics := metrics.New("watermarker-monitor")
 	defer shutdownMetrics()
+	stopPoolMetrics := metrics.DatabasePool(db)
+	defer stopPoolMetrics()
 	ticker := time.NewTicker(15 * time.Second)
 	defer ticker.Stop()
 	log.Info("backlog monitor started")
