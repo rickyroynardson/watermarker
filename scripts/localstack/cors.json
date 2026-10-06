@@ -1,6 +1,6 @@
 {
   "CORSRules": [{
-    "AllowedOrigins": ["http://localhost:5173", "http://127.0.0.1:5173"],
+    "AllowedOrigins": ["http://localhost:5173", "http://127.0.0.1:5173", "http://localhost:5180", "http://127.0.0.1:5180"],
     "AllowedMethods": ["POST"],
     "AllowedHeaders": ["*"],
     "MaxAgeSeconds": 3600

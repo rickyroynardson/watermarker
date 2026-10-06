@@ -1,0 +1,6 @@
+# Replace with your AWS account ID and a globally unique bucket name.
+aws_account_id = "123456789012"
+aws_region     = "us-east-1"
+name_prefix    = "watermarker-dev"
+bucket_name    = "watermarker-dev-replace-me"
+app_origins    = ["http://localhost:5173", "http://127.0.0.1:5173"]

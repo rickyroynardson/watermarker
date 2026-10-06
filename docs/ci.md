@@ -5,15 +5,17 @@ requests and manual runs from GitHub's Actions tab. Feature branches need an ope
 PR for automatic checks, avoiding duplicate push and PR runs. New commits cancel
 older runs for the same branch or pull request.
 
-Three jobs run in parallel:
+Four jobs run in parallel:
 
 - **Go tests:** formatting, unit tests and Docker-backed integration tests with
   the race detector. The Ubuntu runner has a C compiler, so CGO stays enabled.
 - **Python tests:** locked worker dependencies and standard-library unit tests.
 - **Frontend checks:** lint, formatting, tests, TypeScript and Vite build, plus
   the existing load-script tests.
+- **Terraform checks:** formatting, provider initialization, validation and mocked
+  tests. It needs no AWS credentials and deploys no AWS resources.
 
-After those pass, **Container smoke test** builds the three application images
+After the three application jobs pass, **Container smoke test** builds the three application images
 and runs `scripts/test_container_stack.py`. It checks migrations, proxying,
 uploads, worker processing, results, SSE and signed downloads using disposable
 services. Failures print service logs, and the script removes its resources.
@@ -60,12 +62,13 @@ This workflow does not deploy anything.
 
 ## Pull request workflow
 
-GitHub branch protection for `main` requires a pull request, all four CI checks
+GitHub branch protection for `main` requires a pull request, the four existing application CI checks
 passing against the latest base branch, and resolved review conversations.
 It applies to administrators too; force pushes and branch deletion are disabled.
 Required approvals are zero so a solo maintainer can merge their own PR. Raise
 that count to one when another reviewer joins. These settings live on GitHub,
-not in this workflow file.
+not in this workflow file. The new Terraform check must be added separately
+to required checks after its first GitHub run if it should also block merging.
 
 For each change:
 
@@ -79,3 +82,31 @@ gh pr create --base main
 Review the diff and CI results before merging. If the branch is behind `main`,
 update it and wait for the checks again. After merging, return to `main` and
 pull the latest changes before starting the next branch.
+
+Terraform configuration in `infra/terraform` also runs formatting, initialization,
+validation, and provider-mocked tests in CI. This job uses no AWS credentials and
+never applies resources to AWS. See the [infrastructure guide](../infra/terraform/README.md).
+
+## Provider checksums across Mac and CI
+
+CI initializes providers with `-lockfile=readonly`. Commit verified unpacked
+package (`h1:`) checksums for both `darwin_arm64` (Apple Silicon development)
+and `linux_amd64` (GitHub's Ubuntu runner). The official archive (`zh:`) hashes
+can verify a download, but read-only initialization cannot add a missing platform's
+unpacked checksum before validation checks the cached package.
+
+When intentionally updating a provider, run this for each Terraform root:
+
+```sh
+terraform -chdir=infra/terraform providers lock -platform=darwin_arm64 -platform=linux_amd64
+terraform -chdir=infra/ecs-local providers lock -platform=darwin_arm64 -platform=linux_amd64
+terraform -chdir=infra/state-bootstrap providers lock -platform=darwin_arm64 -platform=linux_amd64
+```
+
+Review and commit the lock-file changes. Keep checksum verification enabled;
+provider caches and state files stay uncommitted. If a correctly locked package
+is damaged, remove only the affected provider cache and initialize again. Do not
+delete the whole `.terraform` directory: it also contains backend configuration
+and our ignored LocalStack working copies.
+
+Reference: [Terraform provider locking](https://developer.hashicorp.com/terraform/cli/commands/providers/lock).
