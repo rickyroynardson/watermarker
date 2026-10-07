@@ -69,3 +69,11 @@ cleanup-query-lab:
 .PHONY: quota-lock-lab
 quota-lock-lab:
 	PYTHONDONTWRITEBYTECODE=1 python3 scripts/db/query_lab.py quota-locks
+
+.PHONY: backup-recovery-lab
+backup-recovery-lab:
+	PYTHONDONTWRITEBYTECODE=1 python3 scripts/db/query_lab.py backup-recovery
+
+.PHONY: pitr-recovery-lab
+pitr-recovery-lab:
+	PYTHONDONTWRITEBYTECODE=1 python3 scripts/db/query_lab.py pitr-recovery
