@@ -49,6 +49,37 @@ The worker installs dependencies from `uv.lock` during the build and runs Python
 directly, without installing packages at startup. See
 [uv's Docker guide](https://docs.astral.sh/uv/guides/integration/docker/).
 
+## Local account without Google
+
+After `make app-up`, you can create a demo account without configuring OIDC.
+Run this from the repository root against the local Compose database only:
+
+```sh
+docker compose -f docker-compose.yml -f docker-compose.app.yml exec -T postgres \
+  psql -U watermarker -d watermarker -v ON_ERROR_STOP=1 <<'SQL'
+BEGIN;
+INSERT INTO users(id,name)
+VALUES ('11111111-1111-4111-8111-111111111111','Local demo')
+ON CONFLICT (id) DO NOTHING;
+INSERT INTO api_keys(id,user_id,name,key_hash)
+VALUES ('22222222-2222-4222-8222-222222222222',
+        '11111111-1111-4111-8111-111111111111','Local demo',
+        '2a0fb1074a14249741dbe138b4e0552ab770bf3ffb3eb76800b45dd8b2c7cbc7')
+ON CONFLICT (id) DO NOTHING;
+COMMIT;
+SQL
+```
+
+Open http://localhost:5173 and enter `watermarker-local-demo-key` as the API key.
+This is a public development credential; use it only for this local demo account.
+The database stores its SHA-256 hash. Repeating the command keeps the same account
+and does not reactivate a revoked key.
+
+Use `scripts/load/fixtures/source.jpg` and `scripts/load/fixtures/watermark.png`
+for a first batch. Set `QUOTA_DEMO_ENABLED=true` in the root `.env` and rerun
+`make app-up` if you want to try the simulated plan upgrades. API-key access does
+not enable sign-in/out or key management; those require an OIDC browser session.
+
 ## Scale and optional tools
 
 ```sh

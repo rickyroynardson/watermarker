@@ -54,6 +54,8 @@ func main() {
 	}
 	shutdownMetrics := metrics.New("watermarker-monitor")
 	defer shutdownMetrics()
+	stopPoolMetrics := metrics.DatabasePool(db)
+	defer stopPoolMetrics()
 	ticker := time.NewTicker(15 * time.Second)
 	defer ticker.Stop()
 	log.Info("backlog monitor started")
@@ -96,6 +98,15 @@ func main() {
 			log.Warn("observe cleanup", zap.Error(err))
 		} else {
 			metrics.CleanupObjects(ctx, counts)
+		}
+		pollCtx, cancel = context.WithTimeout(ctx, 3*time.Second)
+		activity, err := database.ObserveActivity(pollCtx, db)
+		cancel()
+		metrics.BacklogObservation(ctx, "database", err)
+		if err != nil {
+			log.Warn("observe database activity", zap.Error(err))
+		} else {
+			metrics.DatabaseActivity(ctx, activity)
 		}
 		select {
 		case <-ctx.Done():

@@ -16,12 +16,26 @@ import (
 var ErrExceeded = errors.New("storage quota exceeded")
 
 // Source reservations and stored outputs count; temporary staging copies are excluded.
-// Reservations count until the persistent object is deleted, including abandoned uploads.
-// ponytail: sum indexed account reservations; use a transactional counter if history makes reads slow.
-const usage = `SELECT (COALESCE(sum(r.bytes),0)+(SELECT COALESCE(sum(o.bytes),0) FROM output_storage o
- WHERE o.user_id=$1 AND NOT EXISTS(SELECT 1 FROM cleanup_objects c WHERE c.key=o.key AND c.deleted_at IS NOT NULL)))::bigint FROM upload_reservations r
- WHERE r.user_id=$1 AND NOT EXISTS(SELECT 1 FROM cleanup_objects c WHERE c.key=r.key AND c.deleted_at IS NOT NULL
- AND (EXISTS(SELECT 1 FROM batches b WHERE b.watermark_key=r.key) OR EXISTS(SELECT 1 FROM images i WHERE i.source_key=r.key) OR EXISTS(SELECT 1 FROM cleanup_objects staging WHERE staging.key=replace(r.key,'sources/','uploads/') AND staging.deleted_at IS NOT NULL)))`
+// Referenced sources count until persistent deletion; abandoned uploads until both copies are deleted.
+// Join the unique cleanup key directly; preserve one row per reservation/output.
+// This keeps owner filtering outside the nested deletion/reference predicate.
+// ponytail: aggregate account records; use a transactional counter if history makes reads slow.
+const usage = `SELECT (
+ COALESCE(sum(r.bytes),0) + (
+   SELECT COALESCE(sum(o.bytes),0)
+   FROM output_storage o LEFT JOIN cleanup_objects c ON c.key=o.key
+   WHERE o.user_id=$1 AND c.deleted_at IS NULL
+ )
+)::bigint
+FROM upload_reservations r LEFT JOIN cleanup_objects c ON c.key=r.key
+WHERE r.user_id=$1 AND (
+ c.deleted_at IS NULL OR NOT (
+   EXISTS(SELECT 1 FROM batches b WHERE b.watermark_key=r.key)
+   OR EXISTS(SELECT 1 FROM images i WHERE i.source_key=r.key)
+   OR EXISTS(SELECT 1 FROM cleanup_objects staging
+     WHERE staging.key=replace(r.key,'sources/','uploads/') AND staging.deleted_at IS NOT NULL)
+ )
+)`
 
 type Account struct {
 	DemoEnabled bool   `json:"demo_enabled"`

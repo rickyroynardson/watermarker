@@ -53,3 +53,27 @@ ecs-up:
 
 ecs-down:
 	sh scripts/ecs-local.sh down
+
+.PHONY: query-lab
+query-lab:
+	python3 scripts/db/query_lab.py
+
+.PHONY: quota-query-lab
+quota-query-lab:
+	python3 scripts/db/query_lab.py quota-usage
+
+.PHONY: cleanup-query-lab
+cleanup-query-lab:
+	python3 scripts/db/query_lab.py cleanup-scheduling
+
+.PHONY: quota-lock-lab
+quota-lock-lab:
+	PYTHONDONTWRITEBYTECODE=1 python3 scripts/db/query_lab.py quota-locks
+
+.PHONY: backup-recovery-lab
+backup-recovery-lab:
+	PYTHONDONTWRITEBYTECODE=1 python3 scripts/db/query_lab.py backup-recovery
+
+.PHONY: pitr-recovery-lab
+pitr-recovery-lab:
+	PYTHONDONTWRITEBYTECODE=1 python3 scripts/db/query_lab.py pitr-recovery

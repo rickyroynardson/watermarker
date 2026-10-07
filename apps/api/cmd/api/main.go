@@ -42,6 +42,8 @@ func main() {
 		logger.Fatal("unable to create connection pool", zap.Error(err))
 	}
 	defer dbpool.Close()
+	stopPoolMetrics := metrics.DatabasePool(dbpool)
+	defer stopPoolMetrics()
 
 	if err := dbpool.Ping(context.Background()); err != nil {
 		logger.Fatal("unable to ping database", zap.Error(err))
